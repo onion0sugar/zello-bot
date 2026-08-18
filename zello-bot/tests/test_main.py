@@ -1,6 +1,7 @@
-"""Testy logiki głównej: zapytania, checkpoint last_id, pętla serwisu.
+"""Testy logiki głównej: zapytanie, pętla serwisu (bez zapamiętywania zamówień).
 
-pyodbc / Zello / audio są zamockowane — żadnego prawdziwego MSSQL ani Zello.
+Zachowanie: bot NIE pamięta last_id — każde zapytanie zwracające wiersz
+powoduje powiadomienie, nawet jeśli to ten sam wiersz co wcześniej.
 """
 
 from __future__ import annotations
@@ -10,14 +11,7 @@ import unittest
 from types import SimpleNamespace
 
 import main
-from main import (
-    DEFAULT_TEXT,
-    get_last_id,
-    get_next_order,
-    init_state,
-    run_service,
-    set_last_id,
-)
+from main import DEFAULT_TEXT, get_next_order, run_service
 
 # --- podróbki bazy -------------------------------------------------------------
 
@@ -25,9 +19,8 @@ from main import (
 class FakeCursor:
     """Cursor odpowiadający na zapytania wg mapy: substring SQL → wiersz."""
 
-    def __init__(self, responses: dict[str, tuple | None], rowcount: int = 1):
+    def __init__(self, responses: dict[str, tuple | None]):
         self.responses = responses
-        self.rowcount = rowcount
         self.calls: list[tuple[str, tuple | None]] = []
         self._result = None
 
@@ -38,7 +31,6 @@ class FakeCursor:
             if key in sql:
                 self._result = row
                 return
-        self._result = None
 
     def fetchone(self):
         return self._result
@@ -68,7 +60,6 @@ class FakeDB:
 class FakeZello:
     def __init__(self):
         self.texts: list[tuple[str, str]] = []
-        self.voices: list[tuple[str, int]] = []
         self.started = False
         self.closed = False
 
@@ -82,7 +73,7 @@ class FakeZello:
         self.texts.append((channel, text))
 
     async def send_voice(self, channel, packets, codec_header):
-        self.voices.append((channel, len(packets)))
+        pass
 
 
 def make_cfg(**overrides) -> SimpleNamespace:
@@ -97,87 +88,57 @@ def make_cfg(**overrides) -> SimpleNamespace:
     return SimpleNamespace(**base)
 
 
-# --- testy zapytań --------------------------------------------------------------
+# --- testy zapytania -------------------------------------------------------------
 
 
-def test_get_next_order_uses_parameterized_query():
+def test_get_next_order_returns_row_without_parameters():
     cursor = FakeCursor({"SELECT TOP 1": (101, "ZAM/2026/1234")})
-    order = get_next_order(cursor, 100)
+    order = get_next_order(cursor)
     assert order == (101, "ZAM/2026/1234")
     sql, params = cursor.calls[0]
-    assert "WHERE id > ?" in sql
-    assert params == (100,)
+    assert "SELECT TOP 1" in sql
+    assert params is None  # bez parametrów — bot nie pamięta last_id
 
 
 def test_get_next_order_none_when_empty():
     cursor = FakeCursor({"SELECT TOP 1": None})
-    assert get_next_order(cursor, 100) is None
+    assert get_next_order(cursor) is None
 
 
-def test_set_last_id_updates_existing_row():
-    cursor = FakeCursor({"UPDATE dbo.zello_bot_state": None}, rowcount=1)
-    set_last_id(cursor, 101)
-    assert len(cursor.calls) == 1
-    assert cursor.calls[0][0].startswith("UPDATE")
-
-
-def test_set_last_id_inserts_when_missing_row():
-    cursor = FakeCursor({"UPDATE dbo.zello_bot_state": None}, rowcount=0)
-    set_last_id(cursor, 101)
-    assert len(cursor.calls) == 2
-    assert cursor.calls[1][0].startswith("INSERT")
-    assert cursor.calls[1][1] == ("orders", 101)
-
-
-def test_init_state_skips_when_row_exists():
-    cursor = FakeCursor({"SELECT last_id": (50,)})
-    init_state(cursor)
-    assert len(cursor.calls) == 1  # bez MAX(id), bez INSERT/UPDATE
-
-
-def test_init_state_first_run_uses_max_id():
-    # UPDATE bez dopasowania → rowcount=0 → następuje INSERT
-    cursor = FakeCursor({"SELECT last_id": None, "ISNULL(MAX(id)": (42,)}, rowcount=0)
-    init_state(cursor)
-    sqls = [sql for sql, _ in cursor.calls]
-    assert any("ISNULL(MAX(id), 0)" in sql for sql in sqls)
-    assert any(sql.startswith("INSERT") for sql in sqls)
+def test_no_order_memory_left():
+    """Mechanizm zapamiętywania (last_id / tabela stanu) został usunięty."""
+    assert not hasattr(main, "get_last_id")
+    assert not hasattr(main, "set_last_id")
+    assert not hasattr(main, "init_state")
+    assert "zello_bot_state" not in main.GET_NEXT_ORDER_SQL
 
 
 # --- pętla serwisu ---------------------------------------------------------------
 
 
 class ServiceLoopTests(unittest.IsolatedAsyncioTestCase):
-    async def test_loop_sends_notification_and_updates_last_id(self):
-        cursor = FakeCursor(
-            {
-                "SELECT last_id": (100,),
-                "SELECT TOP 1": (101, "ZAM/2026/1234"),
-                "UPDATE dbo.zello_bot_state": None,
-            }
-        )
+    async def test_loop_notifies_even_when_query_keeps_returning_same_row(self):
+        # zapytanie ZAWSZE zwraca ten sam wiersz — bot ma wysyłać powiadomienie
+        cursor = FakeCursor({"SELECT TOP 1": (101, "ZAM/2026/1234")})
         db = FakeDB(cursor)
         zello = FakeZello()
         stop = asyncio.Event()
         main.connect_db = lambda cfg: db
         main.Zello = lambda *a, **kw: zello
-        updated = []
 
-        def fake_set_last_id(c, value):
-            updated.append(value)
+        def fake_get_next_order(c):
             stop.set()
+            return (101, "ZAM/2026/1234")
 
-        main.set_last_id = fake_set_last_id
+        main.get_next_order = fake_get_next_order
 
         result = await run_service(make_cfg(poll_interval=0.02), stop=stop)
-
         assert result == 0
         assert zello.texts == [("Magazyn", DEFAULT_TEXT.format("ZAM/2026/1234"))]
-        assert updated == [101]
         assert zello.closed and db.closed
 
-    async def test_loop_sleeps_when_no_order_then_exits_on_stop(self):
-        cursor = FakeCursor({"SELECT last_id": (100,), "SELECT TOP 1": None})
+    async def test_loop_does_nothing_when_query_returns_nothing(self):
+        cursor = FakeCursor({"SELECT TOP 1": None})
         db = FakeDB(cursor)
         zello = FakeZello()
         stop = asyncio.Event()
@@ -192,7 +153,7 @@ class ServiceLoopTests(unittest.IsolatedAsyncioTestCase):
 
         result = await run_service(make_cfg(poll_interval=0.02), stop=stop)
         assert result == 0
-        assert zello.texts == []  # nic nie wysłano — brak nowych rekordów
+        assert zello.texts == []  # nic nie wysłano — zapytanie nic nie zwróciło
         assert db.closed
 
 

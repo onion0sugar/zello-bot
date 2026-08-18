@@ -13,21 +13,24 @@ Brak zewnętrznych zależności poza: `pyodbc`, `websockets`, `python-dotenv`,
 
 ## Jak działa
 
-1. Program pamięta ostatnio obsłużone ID w tabeli `dbo.zello_bot_state`
-   (trwale w SQL — przeżywa restart).
-2. **Pierwsze uruchomienie**: jeśli wiersz `orders` nie istnieje, bot zapisuje
-   `ISNULL(MAX(id), 0)` jako punkt startowy — **historyczne zamówienia nie są
-   wysyłane**. Dopiero nowe rekordy wywołują powiadomienie.
-3. Pętla: `SELECT TOP 1 ... WHERE id > ?` → wysłanie → `UPDATE last_id`.
-4. Połączenie WebSocket z Zello jest trzymane otwarte; po zerwaniu: 5 s
+1. Baza jest traktowana jako **tylko do odczytu** — bot wykonuje wyłącznie
+   `SELECT`, nigdy nic nie zapisuje (connection string zawiera
+   `ApplicationIntent=ReadOnly`). Konto MSSQL potrzebuje tylko `GRANT SELECT`.
+2. Bot **nie zapamiętuje** zamówień — nie ma tabeli stanu, checkpointu ani
+   zapisu `last_id`.
+3. Pętla: `SELECT TOP 1 ...` → jeśli zapytanie zwróciło wiersz → wyślij
+   powiadomienie (tekst i/lub głos, wg `SEND_TEXT` / `SEND_VOICE`) → odczekaj
+   `POLL_INTERVAL` → powtórz.
+4. Jeśli zapytanie **ciągle zwraca ten sam wiersz**, powiadomienie będzie
+   wysyłane za każdym razem — to zamierzone zachowanie. Warunek wyboru wiersza
+   (`WHERE ...`) ustawiasz sam w `GET_NEXT_ORDER_SQL`.
+5. Połączenie WebSocket z Zello jest trzymane otwarte; po zerwaniu: 5 s
    przerwy, ponowne połączenie i logowanie (bez exponential backoff).
-5. Wiadomość uznajemy za wysłaną **dopiero po** odpowiedzi `{"seq": N, "success": true}`.
+6. Wiadomość uznajemy za wysłaną **dopiero po** odpowiedzi `{"seq": N, "success": true}`.
 
-Kolejność dla nowego rekordu: tekst → głos → dopiero potem zapis `last_id`.
-Jeśli głos się nie powiedzie, `last_id` nie jest zapisywane i przy następnej
-próbie tekst może zostać wysłany ponownie — dla tej prostej wersji jest to
-świadomie zaakceptowane (można to rozbudować o osobne `text_sent`/`voice_sent`
-w tabeli stanu).
+Kolejność dla jednego powiadomienia: tekst → głos (wg flag). Jeśli głos się nie
+powiedzie, przy następnym pollingu powiadomienie zostanie wysłane ponownie —
+dla tej prostej wersji jest to świadomie zaakceptowane.
 
 ## Wymagania (Debian / Ubuntu)
 
@@ -62,23 +65,10 @@ cp .env.example .env
 nano .env                              # uzupełnij dane
 ```
 
-Przygotuj tabelę stanu w MSSQL (wykonaj jako administrator bazy):
+Bot nie używa żadnej tabeli stanu — nie musisz niczego tworzyć w bazie.
 
-```sql
-CREATE TABLE dbo.zello_bot_state (
-    bot_name NVARCHAR(100) PRIMARY KEY,
-    last_id BIGINT NOT NULL
-);
-```
-
-Opcjonalny rekord startowy (jeśli pominiesz — bot sam ustawi MAX(id)):
-
-```sql
-INSERT INTO dbo.zello_bot_state (bot_name, last_id) VALUES ('orders', 0);
-```
-
-Użytkownik MSSQL potrzebuje tylko: `SELECT` na tabeli zamówień oraz
-`SELECT, INSERT, UPDATE` na `dbo.zello_bot_state`. Nie używaj konta `sa`.
+Użytkownik MSSQL potrzebuje tylko: `SELECT` na tabeli zamówień.
+Nie używaj konta `sa`.
 
 ## Testy przed startem
 
@@ -106,7 +96,6 @@ INFO New order id=1234
 INFO Text sent
 INFO Sending voice
 INFO Voice sent
-INFO Updated last_id=1234
 ```
 
 ## systemd (serwis 24/7)
@@ -138,14 +127,15 @@ SELECT TOP 1
     id,
     order_number
 FROM dbo.orders
-WHERE id > ?
+WHERE id > 0          -- ← TU wpisz swój warunek (np. status = 'oczekuje')
 ORDER BY id ASC;
 """
 ```
 
-Podmień nazwę tabeli i kolumny. Wiersz musi zwracać `id` (rosnące, do
-checkpointu) i `order_number` (tekst wyświetlany w wiadomości). Formatu
-wiadomości dotyczy `DEFAULT_TEXT`:
+Podmień nazwę tabeli, kolumny i warunek `WHERE`. Wiersz musi zwracać `id`
+i `order_number` (tekst wyświetlany w wiadomości). Bot nie pamięta, co już
+wysłał — to warunek w `WHERE` decyduje, co jest "do wysłania" (np. status,
+flaga, data). Formatu wiadomości dotyczy `DEFAULT_TEXT`:
 
 ```python
 DEFAULT_TEXT = "🔔 Nowe zamówienie: {}"

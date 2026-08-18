@@ -1,4 +1,8 @@
-"""Zello Bot — prosty notifier: MSSQL → wykrycie nowego rekordu → wiadomość na kanał Zello.
+"""Zello Bot — prosty notifier: MSSQL → wynik zapytania → wiadomość na kanał Zello.
+
+Bot NIE zapamiętuje obsłużonych zamówień: za każdym razem, gdy zapytanie
+zwróci wiersz, wysyła powiadomienie — nawet jeśli to ten sam wiersz, co
+w poprzednim pollingu.
 
 Warianty:
     python main.py                  # serwis: polling co POLL_INTERVAL sekund
@@ -30,20 +34,21 @@ from zello import Zello, ZelloError
 logger = logging.getLogger("bot")
 
 # ============================================================================
-# ZMIEŃ TU ZAPYTANIE O ZAMÓWIENIA — jedyne miejsce dostosowania do Twojej ERP.
-# Parametr (?) to ostatnie obsłużone ID. Zapytanie musi zwracać max 1 wiersz.
+# ZMIEŃ TU ZAPYTANIE — jedyne miejsce dostosowania do Twojej ERP.
+# Bot NIE zapamiętuje zamówień: każde zwrócenie wiersza = powiadomienie
+# (nawet dla tego samego zamówienia co w poprzednim pollingu).
+# Własny warunek wpisz w WHERE, np. status = 'oczekuje'. Max 1 wiersz.
 # ============================================================================
 GET_NEXT_ORDER_SQL = """
 SELECT TOP 1
     id,
     order_number
 FROM dbo.orders
-WHERE id > ?
+WHERE id > 0
 ORDER BY id ASC;
 """
 # ============================================================================
 
-BOT_NAME = "orders"          # nazwa wiersza w dbo.zello_bot_state
 RECONNECT_DELAY = 5          # sekundy przerwy po błędzie
 DEFAULT_TEXT = "🔔 Nowe zamówienie: {}"
 
@@ -87,7 +92,12 @@ def load_config() -> SimpleNamespace:
 
 
 def connect_db(cfg: SimpleNamespace):
-    """Połączenie pyodbc (autocommit — każda instrukcja to własna transakcja)."""
+    """Połączenie pyodbc. Bot wykonuje WYŁĄCZNIE SELECT — baza tylko do odczytu.
+
+    ApplicationIntent=ReadOnly to jawna deklaracja intencji tylko-do-odczytu;
+    przy Always On Availability Groups połączenie trafia do repliki
+    przeznaczonej do odczytu. Na zwykłym serwerze parametr jest ignorowany.
+    """
     if pyodbc is None:
         raise RuntimeError("pyodbc nie jest zainstalowane — pip install -r requirements.txt")
     dsn = (
@@ -96,7 +106,8 @@ def connect_db(cfg: SimpleNamespace):
         f"DATABASE={cfg.mssql_database};"
         f"UID={cfg.mssql_username};"
         f"PWD={cfg.mssql_password};"
-        "Encrypt=yes;TrustServerCertificate=yes"
+        "Encrypt=yes;TrustServerCertificate=yes;"
+        "ApplicationIntent=ReadOnly"
     )
     cnxn = pyodbc.connect(dsn, timeout=10, autocommit=True)
     cnxn.timeout = 15
@@ -104,32 +115,9 @@ def connect_db(cfg: SimpleNamespace):
     return cnxn
 
 
-def get_last_id(cursor) -> int | None:
-    cursor.execute("SELECT last_id FROM dbo.zello_bot_state WHERE bot_name = ?", (BOT_NAME,))
-    row = cursor.fetchone()
-    return int(row[0]) if row else None
-
-
-def set_last_id(cursor, value: int) -> None:
-    cursor.execute("UPDATE dbo.zello_bot_state SET last_id = ? WHERE bot_name = ?", (value, BOT_NAME))
-    if cursor.rowcount == 0:
-        cursor.execute(
-            "INSERT INTO dbo.zello_bot_state (bot_name, last_id) VALUES (?, ?)", (BOT_NAME, value)
-        )
-
-
-def init_state(cursor) -> None:
-    """Pierwsze uruchomienie: punkt startowy = aktualne MAX(id) — bez historii."""
-    if get_last_id(cursor) is not None:
-        return
-    cursor.execute("SELECT ISNULL(MAX(id), 0) FROM dbo.orders")
-    start = int(cursor.fetchone()[0])
-    set_last_id(cursor, start)
-    logger.info("First run: last_id = MAX(id) = %d (historical orders skipped)", start)
-
-
-def get_next_order(cursor, last_id: int) -> tuple[int, str] | None:
-    cursor.execute(GET_NEXT_ORDER_SQL, (last_id,))
+def get_next_order(cursor) -> tuple[int, str] | None:
+    """Wykonaj zapytanie. Wiersz zwrócony → powiadomienie (bez zapamiętywania)."""
+    cursor.execute(GET_NEXT_ORDER_SQL)
     row = cursor.fetchone()
     return (int(row[0]), str(row[1])) if row else None
 
@@ -161,8 +149,6 @@ async def notify(z: Zello, cfg: SimpleNamespace, order_number: str, voice_packet
 async def run_service(cfg: SimpleNamespace, stop: asyncio.Event | None = None) -> int:
     stop = stop or asyncio.Event()
     db = connect_db(cfg)
-    with db.cursor() as cursor:
-        init_state(cursor)
 
     voice_packets = load_voice_packets(cfg) if cfg.send_voice else []  # fail-fast przy braku pliku
 
@@ -179,19 +165,12 @@ async def run_service(cfg: SimpleNamespace, stop: asyncio.Event | None = None) -
     while not stop.is_set():
         try:
             with db.cursor() as cursor:
-                last_id = get_last_id(cursor)
-                if last_id is None:
-                    init_state(cursor)
-                    last_id = get_last_id(cursor)
-                order = get_next_order(cursor, last_id)
+                order = get_next_order(cursor)
             if order:
                 order_id, order_number = order
                 logger.info("New order id=%s", order_id)
                 await notify(z, cfg, order_number, voice_packets)
-                with db.cursor() as cursor:
-                    set_last_id(cursor, order_id)
-                logger.info("Updated last_id=%s", order_id)
-                continue  # od razu sprawdź następny rekord
+            # stały rytm pollingu — także wtedy, gdy zapytanie ciągle zwraca ten sam wiersz
             await asyncio.wait_for(stop.wait(), timeout=cfg.poll_interval)
         except asyncio.TimeoutError:
             pass  # przerwa pollingu — oczekiwane zachowanie, nie błąd
