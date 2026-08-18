@@ -77,6 +77,8 @@ def load_config() -> SimpleNamespace:
         mssql_database=env("MSSQL_DATABASE", required=True),
         mssql_username=env("MSSQL_USERNAME", required=True),
         mssql_password=env("MSSQL_PASSWORD", required=True),
+        mssql_encrypt=env("MSSQL_ENCRYPT", "yes"),
+        mssql_trust_server_certificate=env("MSSQL_TRUST_SERVER_CERTIFICATE", "yes"),
         # Zello: Work (ZELLO_NETWORK) LUB Friends & Family (ZELLO_AUTH_TOKEN)
         zello_network=env("ZELLO_NETWORK"),
         zello_username=env("ZELLO_USERNAME", required=True),
@@ -119,7 +121,7 @@ def connect_db(cfg: SimpleNamespace):
         f"DATABASE={cfg.mssql_database};"
         f"UID={cfg.mssql_username};"
         f"PWD={cfg.mssql_password};"
-        "Encrypt=yes;TrustServerCertificate=yes;"
+        f"Encrypt={cfg.mssql_encrypt};TrustServerCertificate={cfg.mssql_trust_server_certificate};"
         "ApplicationIntent=ReadOnly"
     )
     cnxn = pyodbc.connect(dsn, timeout=10, autocommit=True)
