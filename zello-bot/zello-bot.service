@@ -1,0 +1,25 @@
+[Unit]
+Description=Zello Bot (MSSQL -> Zello)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=zello-bot
+Group=zello-bot
+WorkingDirectory=/opt/zello-bot
+Environment=PYTHONUNBUFFERED=1
+# Sekrety czytane z /opt/zello-bot/.env (chmod 600, własność zello-bot)
+EnvironmentFile=/opt/zello-bot/.env
+ExecStart=/opt/zello-bot/.venv/bin/python /opt/zello-bot/main.py
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

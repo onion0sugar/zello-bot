@@ -1,0 +1,14 @@
+# Sekrety — nigdy do repozytorium
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+
+# System
+.DS_Store
+*.log
