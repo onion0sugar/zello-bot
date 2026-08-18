@@ -83,6 +83,7 @@ def make_cfg(**overrides) -> SimpleNamespace:
         zello_network="net", zello_username="bot", zello_password="pw",
         zello_channel="Magazyn", poll_interval=3,
         send_text=True, send_voice=False, voice_file="audio/new_order.wav",
+        zello_auth_token="",
     )
     base.update(overrides)
     return SimpleNamespace(**base)

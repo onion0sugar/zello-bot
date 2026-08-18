@@ -77,14 +77,27 @@ def load_config() -> SimpleNamespace:
         mssql_database=env("MSSQL_DATABASE", required=True),
         mssql_username=env("MSSQL_USERNAME", required=True),
         mssql_password=env("MSSQL_PASSWORD", required=True),
-        zello_network=env("ZELLO_NETWORK", required=True),
+        # Zello: Work (ZELLO_NETWORK) LUB Friends & Family (ZELLO_AUTH_TOKEN)
+        zello_network=env("ZELLO_NETWORK"),
         zello_username=env("ZELLO_USERNAME", required=True),
         zello_password=env("ZELLO_PASSWORD", required=True),
         zello_channel=env("ZELLO_CHANNEL", required=True),
+        zello_auth_token=env("ZELLO_AUTH_TOKEN", ""),
         poll_interval=max(1, int(env("POLL_INTERVAL", "3"))),
         send_text=flag("SEND_TEXT", "true"),
         send_voice=flag("SEND_VOICE", "true"),
         voice_file=env("VOICE_FILE", "audio/new_order.wav"),
+    )
+
+
+def _build_zello(cfg: SimpleNamespace) -> Zello:
+    """Tworzy klienta Zello (Work lub F&F wg konfiguracji)."""
+    return Zello(
+        network=cfg.zello_network or "",
+        username=cfg.zello_username,
+        password=cfg.zello_password,
+        channel=cfg.zello_channel,
+        auth_token=cfg.zello_auth_token,
     )
 
 
@@ -152,7 +165,7 @@ async def run_service(cfg: SimpleNamespace, stop: asyncio.Event | None = None) -
 
     voice_packets = load_voice_packets(cfg) if cfg.send_voice else []  # fail-fast przy braku pliku
 
-    z = Zello(cfg.zello_network, cfg.zello_username, cfg.zello_password, cfg.zello_channel)
+    z = _build_zello(cfg)
     await z.start()
 
     loop = asyncio.get_running_loop()
@@ -216,7 +229,7 @@ def test_db(cfg: SimpleNamespace) -> int:
 
 
 async def test_text(cfg: SimpleNamespace) -> int:
-    z = Zello(cfg.zello_network, cfg.zello_username, cfg.zello_password, cfg.zello_channel)
+    z = _build_zello(cfg)
     await z.start()
     try:
         await z.wait_ready()
@@ -236,7 +249,7 @@ async def test_voice(cfg: SimpleNamespace) -> int:
     except VoiceFileError as exc:
         logger.error("Voice test FAILED: %s", exc)
         return 1
-    z = Zello(cfg.zello_network, cfg.zello_username, cfg.zello_password, cfg.zello_channel)
+    z = _build_zello(cfg)
     await z.start()
     try:
         await z.wait_ready()

@@ -70,6 +70,43 @@ Bot nie używa żadnej tabeli stanu — nie musisz niczego tworzyć w bazie.
 Użytkownik MSSQL potrzebuje tylko: `SELECT` na tabeli zamówień.
 Nie używaj konta `sa`.
 
+## Zello: Work czy Friends & Family
+
+Bot obsługuje oba warianty — wybór robisz samym `.env`:
+
+**Zello Work** (płatne, ma trial):
+
+```env
+ZELLO_NETWORK=moja_siec      # nazwa sieci z konsoli zellowork.io
+ZELLO_USERNAME=sql_bot       # login użytkownika w sieci
+ZELLO_PASSWORD=HASLO         # jego hasło
+ZELLO_CHANNEL=Magazyn        # istniejący kanał, do którego dodany jest użytkownik
+# ZELLO_AUTH_TOKEN zostaje puste
+```
+
+**Zello Friends & Family** (darmowe):
+
+1. Załóż darmowe konto w aplikacji Zello (zello.com/downloads) — konto
+   anonimowe nie może wysyłać wiadomości.
+2. Wejdź na https://developers.zello.com/ → Login (login/hasło z aplikacji) →
+   uzupełnij profil developera → **Keys** → **Add Key**.
+3. Skopiuj **Sample Development Token** (ważny 30 dni) do `.env`:
+
+```env
+# ZELLO_NETWORK zostaje puste
+ZELLO_USERNAME=twoj_login_z_appki
+ZELLO_PASSWORD=twoje_haslo_z_appki
+ZELLO_CHANNEL=nazwa_kanału
+ZELLO_AUTH_TOKEN=pastek_toka_dev
+```
+
+Bot sam wykryje tryb F&F (po ustawionym tokenie) i połączy się pod
+`wss://zello.io/ws`; przy reconnect używany jest `refresh_token` z serwera.
+
+> Token developerski wygasa po 30 dniach — wtedy powtórz kroki 2-3 i zaktualizuj
+> `.env`. Do produkcji Zello zaleca generowanie tokenów JWT na własnym serwerze
+> (Issuer + Private Key z developers.zello.com) — patrz dokumentacja Channel API.
+
 ## Testy przed startem
 
 ```bash

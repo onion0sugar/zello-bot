@@ -244,6 +244,117 @@ class ZelloTests(unittest.IsolatedAsyncioTestCase):
             await z.wait_ready()
         await z.close()
 
+    # -- Zello Friends & Family --------------------------------------------------
+
+    async def test_ff_uses_ff_url_and_auth_token_in_logon(self):
+        urls = []
+        ws = responsive_ws()
+
+        async def factory(url, **kw):
+            urls.append(url)
+            return ws
+
+        async def fake_sleep(seconds):
+            await asyncio.sleep(0)
+
+        z = Zello(
+            "", "sql_bot", "pw", CHANNEL, auth_token="dev-token",
+            ws_connect=factory, sleep=fake_sleep,
+        )
+        await z.start()
+        await z.wait_ready()
+        logon = json.loads(ws.sent[0])
+        assert urls == ["wss://zello.io/ws"]       # endpoint F&F
+        assert logon["auth_token"] == "dev-token"  # JWT z developers.zello.com
+        assert "refresh_token" not in logon        # pierwszy logon — sam auth_token
+        await z.close()
+
+    async def test_work_uses_network_url_without_auth_token(self):
+        urls = []
+        ws = responsive_ws()
+
+        async def factory(url, **kw):
+            urls.append(url)
+            return ws
+
+        async def fake_sleep(seconds):
+            await asyncio.sleep(0)
+
+        z = Zello("testnet", "sql_bot", "pw", CHANNEL, ws_connect=factory, sleep=fake_sleep)
+        await z.start()
+        await z.wait_ready()
+        logon = json.loads(ws.sent[0])
+        assert urls == ["wss://zellowork.io/ws/testnet"]  # endpoint Work
+        assert "auth_token" not in logon
+        await z.close()
+
+    async def test_ff_uses_refresh_token_on_reconnect(self):
+        second_logons = []
+        calls = []
+
+        class DropAfterLogon(FakeWebSocket):
+            async def __anext__(self):
+                if self.script:
+                    return self.script.pop(0)
+                raise ConnectionError("server closed connection")
+
+        def make_first() -> DropAfterLogon:
+            # logon zwraca refresh_token, potem serwer zrywa połączenie
+            ws = DropAfterLogon(script=[])
+
+            async def on_send(data):
+                if isinstance(data, bytes):
+                    return
+                payload = json.loads(data)
+                if payload["command"] == "logon":
+                    ws.script.append(
+                        json.dumps(
+                            {"seq": payload["seq"], "success": True, "refresh_token": "rt-123"}
+                        )
+                    )
+
+            ws._on_send = on_send
+            return ws
+
+        def make_second() -> FakeWebSocket:
+            ws = FakeWebSocket(script=[json.dumps(CHANNEL_ONLINE)])
+
+            async def on_send(data):
+                if isinstance(data, bytes):
+                    return
+                payload = json.loads(data)
+                if payload["command"] == "logon":
+                    second_logons.append(payload)
+                    ws.script.append(json.dumps({"seq": payload["seq"], "success": True}))
+
+            ws._on_send = on_send
+            return ws
+
+        async def factory(url, **kw):
+            if not calls:
+                calls.append("first")
+                return make_first()
+            calls.append("second")
+            return make_second()
+
+        async def fake_sleep(seconds):
+            await asyncio.sleep(0)
+
+        z = Zello(
+            "", "sql_bot", "pw", CHANNEL, auth_token="dev-token",
+            ws_connect=factory, sleep=fake_sleep,
+        )
+        await z.start()
+        await z.wait_ready()
+        assert len(calls) == 2                     # połączenie wznowione
+        assert second_logons[0]["refresh_token"] == "rt-123"  # reconnect używa refresh_token
+        assert "auth_token" not in second_logons[0]
+        await z.close()
+
+    async def test_no_network_no_token_raises(self):
+        with self.assertRaises(ValueError):
+            Zello("", "sql_bot", "pw", CHANNEL)
+
 
 if __name__ == "__main__":
     unittest.main()

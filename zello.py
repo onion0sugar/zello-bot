@@ -1,4 +1,8 @@
-"""Minimalny klient Zello Work Channel API (WebSocket) — tekst + głos.
+"""Minimalny klient Zello Channel API (WebSocket) — tekst + głos.
+
+Obsługuje dwa tryby:
+* Zello Work .............. wss://zellowork.io/ws/{network}  (login+hasło),
+* Zello Friends & Family .. wss://zello.io/ws                (auth_token JWT).
 
 Protokół: https://github.com/zelloptt/zello-channel-api/blob/main/API.md
 
@@ -9,7 +13,9 @@ Zasady:
   potwierdzeniem — czekamy na ``{"seq": N, "success": true}``,
 * Ping/Pong obsługiwane przez bibliotekę websockets (ping_interval=20 s < 30 s,
   po czym Zello zrywa połączenie),
-* głos: start_stream → ramki Opus jako binarne ramki WebSocket → stop_stream.
+* głos: start_stream → ramki Opus jako binarne ramki WebSocket → stop_stream,
+* F&F: przy reconnect używamy refresh_token z poprzedniego logonu; gdy przestanie
+  działać — wracamy do auth_token z konfiguracji.
 
 ``ws_connect`` i ``sleep`` są wstrzykiwalne (maki w testach).
 """
@@ -49,15 +55,26 @@ class Zello:
         username: str,
         password: str,
         channel: str,
+        auth_token: str = "",
         ws_connect=None,
         sleep=None,
         response_timeout: float = RESPONSE_TIMEOUT_SECONDS,
         channel_wait_timeout: float = CHANNEL_WAIT_TIMEOUT_SECONDS,
     ):
-        self._url = f"wss://zellowork.io/ws/{network}"
+        # auth_token (F&F) ma pierwszeństwo; bez obu — błąd konfiguracji.
+        if auth_token:
+            self._url = "wss://zello.io/ws"
+        elif network:
+            self._url = f"wss://zellowork.io/ws/{network}"
+        else:
+            raise ValueError(
+                "podaj network (Zello Work) lub auth_token (Zello Friends & Family)"
+            )
         self._username = username
         self._password = password
         self._channel = channel
+        self._auth_token = auth_token
+        self._refresh_token: str | None = None
         self._ws_connect = ws_connect or (websockets.connect if websockets else None)
         self._sleep = sleep or asyncio.sleep
         self._response_timeout = response_timeout
@@ -156,18 +173,27 @@ class Zello:
     # -- logowanie -------------------------------------------------------------
 
     async def _logon(self) -> None:
-        seq, future = await self._send(
-            {
-                "command": "logon",
-                "seq": self._next_seq(),
-                "username": self._username,
-                "password": self._password,
-                "channels": [self._channel],
-            }
-        )
+        payload = {
+            "command": "logon",
+            "seq": self._next_seq(),
+            "username": self._username,
+            "password": self._password,
+            "channels": [self._channel],
+        }
+        # F&F: po pierwszym logonie używamy refresh_token (szybszy reconnect);
+        # auth_token tylko dopóki nie mamy świeżego refresh_token.
+        if self._refresh_token:
+            payload["refresh_token"] = self._refresh_token
+        elif self._auth_token:
+            payload["auth_token"] = self._auth_token
+        seq, future = await self._send(payload)
         response = await self._await_response(seq, future)
         if not response.get("success"):
+            if "refresh_token" in payload:
+                self._refresh_token = None  # wygasł → następnym razem auth_token
             raise ZelloError(f"logon rejected: {response.get('error', 'unknown error')}")
+        if response.get("refresh_token"):
+            self._refresh_token = response["refresh_token"]
 
     # -- wysyłka ---------------------------------------------------------------
 
