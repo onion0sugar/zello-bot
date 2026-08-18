@@ -115,9 +115,15 @@ def connect_db(cfg: SimpleNamespace):
     """
     if pyodbc is None:
         raise RuntimeError("pyodbc nie jest zainstalowane — pip install -r requirements.txt")
+    # Instancja nazwana (np. 192.168.24.22\SERWISKOPB2B) NIE ma portu w adresie
+    # — numer portu odczytuje SQL Browser (UDP 1434). Port dopisujemy tylko
+    # do zwykłego adresu.
+    server = cfg.mssql_server
+    if "\\" not in server:
+        server = f"{server},{cfg.mssql_port}"
     dsn = (
         "DRIVER={ODBC Driver 18 for SQL Server};"
-        f"SERVER={cfg.mssql_server},{cfg.mssql_port};"
+        f"SERVER={server};"
         f"DATABASE={cfg.mssql_database};"
         f"UID={cfg.mssql_username};"
         f"PWD={cfg.mssql_password};"
