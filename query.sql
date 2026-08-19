@@ -16,8 +16,9 @@
 -- sortowania / warunku dostosuj do swojej tabeli.
 -- ============================================================================
 
-SELECT TOP 1
-    OriginalNumber
-FROM dbo.orders
-WHERE id > 0
-ORDER BY id ASC;
+SELECT TOP(1)OriginalNumber
+  FROM [SerwisKop_Magazyn].[Document].[Documents]
+  WHERE DocumentType = 7
+  AND DateCreatedUtc >= '2026-06-01'
+  AND DocumentStatusText = 'new'
+  AND SubType = 50
