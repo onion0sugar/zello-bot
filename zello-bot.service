@@ -9,8 +9,11 @@ User=zello-bot
 Group=zello-bot
 WorkingDirectory=/opt/zello-bot
 Environment=PYTHONUNBUFFERED=1
-# Sekrety czytane z /opt/zello-bot/.env (chmod 600, własność zello-bot)
-EnvironmentFile=/opt/zello-bot/.env
+# Sekrety czyta sam proces (python-dotenv, /opt/zello-bot/.env; chmod 600,
+# własność zello-bot). BEZ EnvironmentFile: systemd parsuje backslashe
+# inaczej niż python-dotenv, więc "host\instancja" i hasła ze znakami
+# specjalnymi byłyby zepsute przed startem Pythona — objaw: MSSQL
+# "Login timeout expired" tylko w usłudze, a ręcznie działa.
 ExecStart=/opt/zello-bot/.venv/bin/python /opt/zello-bot/main.py
 Restart=always
 RestartSec=5
