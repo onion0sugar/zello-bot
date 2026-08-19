@@ -173,11 +173,17 @@ Oczekiwane logi:
 INFO Connected to MSSQL
 INFO Connected to Zello
 INFO Channel Magazyn online
-INFO New order id=1234
+INFO Query OK — new order: ZAM/2026/00123 (id=None)
 INFO Text sent
 INFO Sending voice
 INFO Voice sent
+INFO Query OK — no new orders
+INFO Query OK — no new orders
 ```
+
+Każdy poll jest logowany (czy zapytanie poleciało i co zwróciło). Przy
+`POLL_INTERVAL=3` daje to jedną linię co 3 s — jeśli to za głośno, zwiększ
+`POLL_INTERVAL` albo ustaw `LOG_LEVEL=WARNING` (błędy nadal będą widoczne).
 
 ## systemd (serwis 24/7)
 

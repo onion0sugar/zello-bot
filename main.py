@@ -89,8 +89,10 @@ async def run_service(cfg: SimpleNamespace, stop: asyncio.Event | None = None) -
                 order = get_next_order(cursor, query)
             if order:
                 order_id, order_number = order
-                logger.info("New order: %s (id=%s)", order_number, order_id)
+                logger.info("Query OK — new order: %s (id=%s)", order_number, order_id)
                 await notify(z, cfg, order_number, voice_packets)
+            else:
+                logger.info("Query OK — no new orders")
             # stały rytm pollingu — także gdy zapytanie ciągle zwraca ten sam wiersz
             await asyncio.wait_for(stop.wait(), timeout=cfg.poll_interval)
         except asyncio.TimeoutError:
