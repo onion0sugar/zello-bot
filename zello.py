@@ -169,11 +169,22 @@ class Zello:
     def _on_channel_status(self, message: dict) -> None:
         if message.get("channel") != self._channel:
             return
-        if message.get("status") == "online" and message.get("texting_supported"):
+        status = message.get("status", "unknown")
+        users = message.get("users_online", "?")
+        if status == "online" and message.get("texting_supported"):
             if not self._ready.is_set():
-                logger.info("Channel %s online", self._channel)
+                logger.info("Channel %s online (%s users)", self._channel, users)
             self._ready.set()
+        elif status == "online" and not message.get("texting_supported"):
+            logger.error("Channel %s is online but texting_supported=false", self._channel)
+            self._ready.clear()
         else:
+            error = message.get("error")
+            error_type = message.get("error_type")
+            detail = f", error={error}, error_type={error_type}" if error else ""
+            logger.warning(
+                "Channel %s is %s (%s users)%s", self._channel, status, users, detail
+            )
             self._ready.clear()
 
     # -- logowanie -------------------------------------------------------------

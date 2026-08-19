@@ -45,6 +45,13 @@ Kolejność dla jednego powiadomienia: tekst → głos. Jeśli głos się nie po
 przy następnym pollingu powiadomienie zostanie wysłane ponownie — dla tej
 prostej wersji świadomie zaakceptowane.
 
+> **Ważne (ograniczenie Zello):** kanał musi mieć **co najmniej jednego
+> zalogowanego użytkownika** (aplikacja), inaczej Zello odrzuca wiadomości
+> błędem `channel is not ready`. Samo połączenie API bota nie liczy się jako
+> obecność w kanale. Standardowo jedno urządzenie (np. stary telefon na
+> ładowarce) zostaje na stałe w kanale. Bez niego powiadomienia docierają
+> dopiero w momencie, gdy ktoś otworzy aplikację.
+
 ## Instalacja (Debian / Ubuntu)
 
 **1. Pakiety systemowe:**
