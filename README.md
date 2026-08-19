@@ -97,9 +97,9 @@ python main.py                  # serwis 24/7
 
 ```env
 # --- MSSQL (jak w działającej aplikacji) ---
-MSSQL_SERVER=192.168.24.22\SERWISKOPB2B   # instancja nazwana, BEZ portu
-MSSQL_DATABASE=SerwisKop_Magazyn
-MSSQL_USERNAME=serwiskop-ro
+MSSQL_SERVER=192.168.24.22  # instancja nazwana, BEZ portu
+MSSQL_DATABASE=1
+MSSQL_USERNAME=2
 MSSQL_PASSWORD=haslo
 MSSQL_ENCRYPT=yes                          # stary serwer bez TLS 1.2 → no
 MSSQL_TRUST_SERVER_CERTIFICATE=yes
