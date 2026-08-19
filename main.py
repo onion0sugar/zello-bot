@@ -141,7 +141,7 @@ async def test_text(cfg: SimpleNamespace) -> int:
     z = _build_zello(cfg)
     await z.start()
     try:
-        await z.wait_ready()
+        await z.wait_logged_in()  # tylko logowanie; online kanału decyduje ZELLO_WAIT_ONLINE
         await z.send_text_message(cfg.zello_channel, "Test wiadomości z bota MSSQL")
     except Exception as exc:
         logger.error("Text test FAILED: %s", exc)
@@ -161,7 +161,7 @@ async def test_voice(cfg: SimpleNamespace) -> int:
     z = _build_zello(cfg)
     await z.start()
     try:
-        await z.wait_ready()
+        await z.wait_logged_in()  # tylko logowanie; online kanału decyduje ZELLO_WAIT_ONLINE
         await z.send_voice(cfg.zello_channel, packets, codec_header())
     except Exception as exc:
         logger.error("Voice test FAILED: %s", exc)

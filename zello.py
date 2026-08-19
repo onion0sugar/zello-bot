@@ -87,6 +87,7 @@ class Zello:
         self._seq = 0
         self._pending: dict[int, asyncio.Future] = {}
         self._ready = asyncio.Event()
+        self._logged_in_event = asyncio.Event()
         self._stop = False
         self._task: asyncio.Task | None = None
 
@@ -132,6 +133,7 @@ class Zello:
             finally:
                 self._ws = None
                 self._ready.clear()
+                self._logged_in_event.clear()
                 self._fail_pending()
             if self._stop:
                 break
@@ -198,6 +200,7 @@ class Zello:
             raise ZelloError(f"logon rejected: {response.get('error', 'unknown error')}")
         if response.get("refresh_token"):
             self._refresh_token = response["refresh_token"]
+        self._logged_in_event.set()
 
     # -- wysyłka ---------------------------------------------------------------
 
@@ -208,9 +211,21 @@ class Zello:
         except asyncio.TimeoutError as exc:
             raise ZelloError("channel not online (or texting not supported)") from exc
 
+    async def wait_logged_in(self, timeout: float | None = None) -> None:
+        """Czeka aż logon się zakończy (NIE czeka na online kanału)."""
+        try:
+            await asyncio.wait_for(
+                self._logged_in_event.wait(), timeout=timeout or self._response_timeout
+            )
+        except asyncio.TimeoutError as exc:
+            raise ZelloError(
+                "not logged in (sprawdź dane Zello w .env: ZELLO_USERNAME/ZELLO_PASSWORD)"
+            ) from exc
+
     async def send_text_message(self, channel: str, text: str) -> None:
         if self._ws is None:
             raise ZelloError("not connected")
+        await self.wait_logged_in()
         if self._wait_online:
             await self.wait_ready()
         seq, future = await self._send(
@@ -228,6 +243,7 @@ class Zello:
     async def send_voice(self, channel: str, packets: list[bytes], codec_header: str) -> None:
         if self._ws is None:
             raise ZelloError("not connected")
+        await self.wait_logged_in()
         if self._wait_online:
             await self.wait_ready()
         seq, future = await self._send(
