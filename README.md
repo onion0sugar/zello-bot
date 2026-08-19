@@ -45,40 +45,55 @@ Kolejność dla jednego powiadomienia: tekst → głos. Jeśli głos się nie po
 przy następnym pollingu powiadomienie zostanie wysłane ponownie — dla tej
 prostej wersji świadomie zaakceptowane.
 
-## Wymagania (Debian / Ubuntu)
+## Instalacja (Debian / Ubuntu)
+
+**1. Pakiety systemowe:**
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y python3 python3-venv python3-pip
+sudo apt-get install -y python3 python3-venv python3-pip ffmpeg libopus0 curl gnupg ca-certificates
+```
 
-# Microsoft ODBC Driver 18 for SQL Server + unixODBC
+**2. Microsoft ODBC Driver 18 for SQL Server:**
+
+```bash
 curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | sudo gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
 curl -fsSL https://packages.microsoft.com/config/ubuntu/24.04/prod.list | sudo tee /etc/apt/sources.list.d/mssql-release.list
 sudo apt-get update
 sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18 unixodbc
-
-# Głos: FFmpeg + libopus
-sudo apt-get install -y ffmpeg libopus0
 ```
 
-Dla Ubuntu 22.04 podmień `24.04` na `22.04`; dla Debian patrz dokumentacja
-Microsoft ODBC.
+> Ubuntu 22.04: w adresie repo zamień `24.04` na `22.04`. Debian: patrz
+> [dokumentacja Microsoft](https://learn.microsoft.com/pl-pl/sql/connect/odbc/linux-mac/installing-the-microsoft-odbc-driver-for-sql-server).
 
-## Instalacja
+**3. Projekt + środowisko:**
 
 ```bash
 cd /opt/zello-bot
-
-python3 -m venv .venv            # NIE przez sudo!
+sudo chown -R $USER:$USER /opt/zello-bot    # tylko gdy katalog zakładałeś przez sudo
+python3 -m venv .venv                       # NIE przez sudo!
 source .venv/bin/activate
 pip install -r requirements.txt
-
-cp .env.example .env
-nano .env                        # uzupełnij dane
-nano query.sql                   # dostosuj zapytanie do swojej tabeli
 ```
 
-### `.env`
+**4. Konfiguracja:**
+
+```bash
+cp .env.example .env
+nano .env          # uzupełnij MSSQL + Zello (wzór niżej)
+nano query.sql     # wpisz nazwę swojej tabeli zamówień
+```
+
+**5. Test i start:**
+
+```bash
+python main.py --test-db        # SELECT 1 + walidacja query.sql
+python main.py --test-text      # test Zello (tekst)
+python main.py --test-voice     # test Zello (głos)
+python main.py                  # serwis 24/7
+```
+
+### Wzór `.env`
 
 ```env
 # --- MSSQL (jak w działającej aplikacji) ---
@@ -107,7 +122,7 @@ SEND_VOICE=true
 VOICE_FILE=audio/new_order.wav
 ```
 
-### Zapytanie — `query.sql`
+### Wzór `query.sql`
 
 Jedyne miejsce, które dostosowujesz do swojej bazy (bez ruszania kodu):
 
