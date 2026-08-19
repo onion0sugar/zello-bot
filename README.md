@@ -45,12 +45,16 @@ Kolejność dla jednego powiadomienia: tekst → głos. Jeśli głos się nie po
 przy następnym pollingu powiadomienie zostanie wysłane ponownie — dla tej
 prostej wersji świadomie zaakceptowane.
 
-> **Ważne (ograniczenie Zello):** kanał musi mieć **co najmniej jednego
-> zalogowanego użytkownika** (aplikacja), inaczej Zello odrzuca wiadomości
-> błędem `channel is not ready`. Samo połączenie API bota nie liczy się jako
-> obecność w kanale. Standardowo jedno urządzenie (np. stary telefon na
-> ładowarce) zostaje na stałe w kanale. Bez niego powiadomienia docierają
-> dopiero w momencie, gdy ktoś otworzy aplikację.
+> **Ważne (ograniczenie Zello):**
+> * kanał musi być **bez hasła** — API Zello nie ma pola na hasło kanału;
+>   chroniony kanał odrzuca połączenie z błędem `invalid password,
+>   error_type=configuration`,
+> * kanał musi mieć **co najmniej jednego zalogowanego użytkownika** (aplikacja),
+>   inaczej Zello odrzuca wiadomości błędem `channel is not ready`. Samo
+>   połączenie API bota nie liczy się jako obecność w kanale. Standardowo jedno
+>   urządzenie (np. stary telefon na ładowarce) zostaje na stałe w kanale —
+>   na koncie innym niż konto bota (jedna sesja na konto: aplikacja i API
+>   wyrzucają się nawzajem).
 
 ## Instalacja (Debian / Ubuntu)
 
@@ -136,15 +140,16 @@ Jedyne miejsce, które dostosowujesz do swojej bazy (bez ruszania kodu):
 
 ```sql
 SELECT TOP 1
-    id,
-    order_number
+    OriginalNumber        -- ← numer zamówienia (np. Twoja kolumna OriginalNumber)
 FROM dbo.orders          -- ← nazwa Twojej tabeli
 WHERE id > 0             -- ← Twój warunek, np. status = 'oczekuje'
 ORDER BY id ASC;
 ```
 
-Wymagania: max 1 wiersz; kolumny `id` (do logów) i `order_number` (numer
-w wiadomości). Komentarze `--` na początku pliku są pomijane.
+Wymagania: max 1 wiersz; **co najmniej 1 kolumna = numer zamówienia**
+(pokazywany w wiadomości). Opcjonalnie druga kolumna `id` (liczba, tylko do
+logów) — wtedy w kolejności: `id, numer`. Komentarze `--` na początku pliku
+są pomijane.
 
 ## Testy przed startem
 

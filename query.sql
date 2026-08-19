@@ -7,15 +7,17 @@
 --
 -- Wymagania:
 --   * max 1 wiersz (TOP 1),
---   * kolumna `id`           — identyfikator (do logów),
---   * kolumna `order_number` — numer pokazywany w wiadomości.
+--   * co najmniej 1 kolumna = numer zamówienia pokazywany w wiadomości
+--     (u Ciebie: OriginalNumber),
+--   * opcjonalnie druga kolumna `id` (liczba) — tylko do logów; wtedy
+--     kolejność: id, numer.
 --
--- Własny warunek wpisz w WHERE, np. status = 'oczekuje'.
+-- Własny warunek wpisz w WHERE (np. status = 'oczekuje'), a kolumnę
+-- sortowania / warunku dostosuj do swojej tabeli.
 -- ============================================================================
 
 SELECT TOP 1
-    id,
-    order_number
+    OriginalNumber
 FROM dbo.orders
 WHERE id > 0
 ORDER BY id ASC;

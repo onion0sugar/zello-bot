@@ -98,11 +98,10 @@ def test_dsn_custom_port():
 
 
 def test_query_file_ships_valid_select():
-    """Wzorcowy query.sql z repozytorium ładuje się i zwraca wymagane kolumny."""
+    """Wzorcowy query.sql z repozytorium ładuje się i zwraca numer zamówienia."""
     sql = load_query()  # realny plik w projekcie
     assert sql.lstrip().upper().startswith("SELECT TOP 1")
-    assert "id" in sql
-    assert "order_number" in sql
+    assert "OriginalNumber" in sql
 
 
 def test_load_query_missing_file_raises(tmp_path):
@@ -144,6 +143,23 @@ def test_get_next_order_returns_row():
 
 def test_get_next_order_none_when_no_row():
     assert get_next_order(FakeCursor(None), "SELECT 1") is None
+
+
+def test_get_next_order_null_order_number_becomes_empty():
+    order = get_next_order(FakeCursor((101, None)), "SELECT 1")
+    assert order == (101, "")
+
+
+def test_get_next_order_single_column_only():
+    """Zapytanie zwraca sam numer (np. OriginalNumber) — id = None."""
+    order = get_next_order(FakeCursor(("ZAM/2026/1234",)), "SELECT 1")
+    assert order == (None, "ZAM/2026/1234")
+
+
+def test_get_next_order_non_numeric_id_is_tolerated():
+    row = ("ZAM/2026/1234", "Klient")  # 2 kolumny, id nie jest liczbą
+    order = get_next_order(FakeCursor(row), "SELECT 1")
+    assert order == (None, "Klient")  # id tylko do logów — nie blokuje wysyłki
 
 
 def test_get_next_order_wraps_db_errors():

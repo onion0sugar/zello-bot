@@ -96,11 +96,30 @@ def connect_db(cfg: SimpleNamespace):
 # --- zapytanie ------------------------------------------------------------------
 
 
-def get_next_order(cursor, query: str) -> tuple[int, str] | None:
-    """Wykonaj zapytanie z query.sql. Wiersz → powiadomienie (bez pamiętania)."""
+def get_next_order(cursor, query: str) -> tuple[int | None, str] | None:
+    """Wykonaj zapytanie z query.sql. Wiersz → powiadomienie (bez pamiętania).
+
+    Obsługuje zapytania zwracające:
+    * 1 kolumnę — sam numer zamówienia (np. OriginalNumber),
+    * 2 kolumny — id (liczba, tylko do logów) + numer zamówienia.
+
+    Zwraca (order_id, order_number); order_id = None, gdy brak kolumny id
+    lub nie jest liczbą.
+    """
     try:
         cursor.execute(query)
         row = cursor.fetchone()
     except Exception as exc:
         raise DbError(f"Query failed: {exc}") from exc
-    return (int(row[0]), str(row[1])) if row else None
+    if row is None:
+        return None
+    if len(row) >= 2:
+        order_number = "" if row[1] is None else str(row[1])
+        try:
+            order_id: int | None = int(row[0])
+        except (TypeError, ValueError):
+            order_id = None  # nie-liczbowe id — niepotrzebne do wysyłki
+        return order_id, order_number
+    # jedna kolumna — sam numer zamówienia
+    order_number = "" if row[0] is None else str(row[0])
+    return None, order_number
