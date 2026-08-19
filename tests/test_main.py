@@ -138,6 +138,28 @@ class ServiceLoopTests(unittest.IsolatedAsyncioTestCase):
         assert zello.texts == []  # nic nie wysłano — zapytanie nic nie zwróciło
         assert db.closed
 
+    async def test_loop_recovers_when_db_unavailable_at_start(self):
+        """Baza chwilowo nieosiągalna → serwis nie pada, tylko ponawia."""
+        attempts = {"n": 0}
+        stop = asyncio.Event()
+
+        def flaky_connect(cfg):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise DbError("MSSQL connection failed: timeout")
+            stop.set()  # druga próba udana → kończymy pętlę
+            return FakeDB()
+
+        with patch.object(main, "RECONNECT_DELAY", 0.02):
+            main.connect_db = flaky_connect
+            main.Zello = lambda *a, **kw: FakeZello()
+            main.get_next_order = lambda cursor, query: None
+            result = await run_service(make_cfg(poll_interval=0.02), stop=stop)
+
+        assert result == 0
+        assert attempts["n"] == 2  # pierwsza padła, druga się udała
+        assert stop.is_set()
+
     async def test_missing_query_file_fails_fast(self):
         with patch("main.load_query", side_effect=DbError("Brak pliku zapytania: query.sql")):
             with pytest.raises(DbError, match="query.sql"):

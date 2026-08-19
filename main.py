@@ -31,6 +31,14 @@ RECONNECT_DELAY = 5          # sekundy przerwy po błędzie
 DEFAULT_TEXT = "🔔 Nowe zamówienie: {}"
 
 
+async def _sleep_until(stop: asyncio.Event, seconds: float) -> None:
+    """Śpi, ale przerywa się natychmiast na sygnał zatrzymania (graceful shutdown)."""
+    try:
+        await asyncio.wait_for(stop.wait(), timeout=seconds)
+    except asyncio.TimeoutError:
+        pass
+
+
 def _build_zello(cfg: SimpleNamespace) -> Zello:
     """Tworzy klienta Zello (Work lub F&F wg konfiguracji)."""
     return Zello(
@@ -69,7 +77,6 @@ async def notify(
 async def run_service(cfg: SimpleNamespace, stop: asyncio.Event | None = None) -> int:
     stop = stop or asyncio.Event()
     query = load_query()  # fail-fast: zły query.sql widać od razu przy starcie
-    db = connect_db(cfg)
 
     voice_packets = load_voice_packets(cfg) if cfg.send_voice else []
 
@@ -83,8 +90,14 @@ async def run_service(cfg: SimpleNamespace, stop: asyncio.Event | None = None) -
         except NotImplementedError:  # pragma: no cover - Windows
             pass
 
+    # Połączenie z MSSQL nawiązywane w pętli (db = None aż do pierwszego
+    # sukcesu) — chwilowa niedostępność bazy przy starcie NIE wywala serwisu,
+    # tylko loguje błąd i ponawia próbę co RECONNECT_DELAY.
+    db = None
     while not stop.is_set():
         try:
+            if db is None:
+                db = connect_db(cfg)
             with db.cursor() as cursor:
                 order = get_next_order(cursor, query)
             if order:
@@ -101,21 +114,20 @@ async def run_service(cfg: SimpleNamespace, stop: asyncio.Event | None = None) -
             raise
         except DbError as exc:
             logger.error("MSSQL error: %s", exc)
-            try:
-                db.close()
-            except Exception:
-                pass
-            try:
-                db = connect_db(cfg)
-            except DbError:
-                logger.error("MSSQL reconnect failed — next try in %d s", RECONNECT_DELAY)
-            await asyncio.sleep(RECONNECT_DELAY)
+            if db is not None:
+                try:
+                    db.close()
+                except Exception:
+                    pass
+            db = None
+            await _sleep_until(stop, RECONNECT_DELAY)
         except Exception:
             logger.exception("Error in main loop")
-            await asyncio.sleep(RECONNECT_DELAY)
+            await _sleep_until(stop, RECONNECT_DELAY)
 
+    if db is not None:
+        db.close()
     await z.close()
-    db.close()
     logger.info("Stopped")
     return 0
 
