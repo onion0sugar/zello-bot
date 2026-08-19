@@ -82,6 +82,7 @@ def make_cfg(**overrides) -> SimpleNamespace:
         zello_password="pw",
         zello_channel="Magazyn",
         zello_auth_token="",
+        zello_wait_online=True,
         poll_interval=3,
         send_text=True,
         send_voice=False,

@@ -355,6 +355,47 @@ class ZelloTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             Zello("", "sql_bot", "pw", CHANNEL)
 
+    # -- wait_online -----------------------------------------------------------
+
+    def _ws_without_channel_status(self) -> FakeWebSocket:
+        """Serwer odpowiada na logon i tekst, ale kanał NIGDY nie zgłasza online."""
+        ws = FakeWebSocket(script=[])
+
+        async def on_send(data):
+            if isinstance(data, bytes):
+                return
+            payload = json.loads(data)
+            if payload["command"] == "logon":
+                ws.script.append(json.dumps({"seq": payload["seq"], "success": True}))
+            elif payload["command"] == "send_text_message":
+                ws.script.append(json.dumps({"seq": payload["seq"], "success": True}))
+
+        ws._on_send = on_send
+        return ws
+
+    async def test_send_works_without_online_when_wait_online_disabled(self):
+        ws = self._ws_without_channel_status()
+        z = make_zello(ws, wait_online=False)
+        await z.start()
+        # poczekaj aż połączenie i logon się ustanowią (kanał pozostaje offline)
+        for _ in range(200):
+            if z._ws is not None:
+                break
+            await asyncio.sleep(0.005)
+        await z.send_text_message(CHANNEL, "Test bez online")
+        assert any(
+            "send_text_message" in m for m in ws.sent if isinstance(m, str)
+        )
+        await z.close()
+
+    async def test_send_requires_online_when_wait_online_enabled(self):
+        ws = self._ws_without_channel_status()
+        z = make_zello(ws, wait_online=True, channel_wait_timeout=0.05)
+        await z.start()
+        with self.assertRaises(ZelloError):
+            await z.send_text_message(CHANNEL, "Test")
+        await z.close()
+
 
 if __name__ == "__main__":
     unittest.main()

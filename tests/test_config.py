@@ -49,6 +49,7 @@ def test_defaults(monkeypatch):
     assert cfg.send_text is True
     assert cfg.send_voice is True
     assert cfg.zello_auth_token == ""
+    assert cfg.zello_wait_online is True
 
 
 def test_flags_parsed(monkeypatch):

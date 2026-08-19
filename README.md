@@ -117,6 +117,7 @@ ZELLO_AUTH_TOKEN=
 
 # --- Zachowanie ---
 POLL_INTERVAL=3
+ZELLO_WAIT_ONLINE=false   # false = wysyłaj bez czekania na "online" kanału
 SEND_TEXT=true
 SEND_VOICE=true
 VOICE_FILE=audio/new_order.wav

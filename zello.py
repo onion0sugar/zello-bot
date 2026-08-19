@@ -60,6 +60,7 @@ class Zello:
         sleep=None,
         response_timeout: float = RESPONSE_TIMEOUT_SECONDS,
         channel_wait_timeout: float = CHANNEL_WAIT_TIMEOUT_SECONDS,
+        wait_online: bool = True,
     ):
         # auth_token (F&F) ma pierwszeństwo; bez obu — błąd konfiguracji.
         if auth_token:
@@ -79,6 +80,9 @@ class Zello:
         self._sleep = sleep or asyncio.sleep
         self._response_timeout = response_timeout
         self._channel_wait_timeout = channel_wait_timeout
+        # Gdy False: wysyłamy bez czekania na "online" kanału (kanał bez
+        # użytkowników aplikacji bywa offline; wiadomość i tak trafia na kanał).
+        self._wait_online = wait_online
         self._ws = None
         self._seq = 0
         self._pending: dict[int, asyncio.Future] = {}
@@ -207,7 +211,8 @@ class Zello:
     async def send_text_message(self, channel: str, text: str) -> None:
         if self._ws is None:
             raise ZelloError("not connected")
-        await self.wait_ready()
+        if self._wait_online:
+            await self.wait_ready()
         seq, future = await self._send(
             {
                 "command": "send_text_message",
@@ -223,7 +228,8 @@ class Zello:
     async def send_voice(self, channel: str, packets: list[bytes], codec_header: str) -> None:
         if self._ws is None:
             raise ZelloError("not connected")
-        await self.wait_ready()
+        if self._wait_online:
+            await self.wait_ready()
         seq, future = await self._send(
             {
                 "command": "start_stream",

@@ -39,6 +39,7 @@ def _build_zello(cfg: SimpleNamespace) -> Zello:
         password=cfg.zello_password,
         channel=cfg.zello_channel,
         auth_token=cfg.zello_auth_token,
+        wait_online=cfg.zello_wait_online,
     )
 
 

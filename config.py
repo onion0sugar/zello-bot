@@ -44,6 +44,7 @@ def load_config(env_file: str | None = None) -> SimpleNamespace:
         zello_password=_env("ZELLO_PASSWORD", required=True),
         zello_channel=_env("ZELLO_CHANNEL", required=True),
         zello_auth_token=_env("ZELLO_AUTH_TOKEN", ""),
+        zello_wait_online=_flag("ZELLO_WAIT_ONLINE", "true"),
         # Zachowanie
         poll_interval=max(1, int(_env("POLL_INTERVAL", "3") or "3")),
         send_text=_flag("SEND_TEXT", "true"),
