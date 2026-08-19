@@ -185,22 +185,78 @@ Każdy poll jest logowany (czy zapytanie poleciało i co zwróciło). Przy
 `POLL_INTERVAL=3` daje to jedną linię co 3 s — jeśli to za głośno, zwiększ
 `POLL_INTERVAL` albo ustaw `LOG_LEVEL=WARNING` (błędy nadal będą widoczne).
 
-## systemd (serwis 24/7)
+## Instalacja jako usługa systemd (24/7)
+
+Zanim zainstalujesz usługę, upewnij się, że bot działa ręcznie
+(`python main.py --test-db` i `--test-text` przechodzą).
+
+**1. Użytkownik usługi (systemowy, bez logowania):**
 
 ```bash
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin zello-bot
-sudo chown -R zello-bot:zello-bot /opt/zello-bot
-sudo chmod 600 /opt/zello-bot/.env
+```
 
+**2. Oddaj projekt temu użytkownikowi:**
+
+```bash
+cd /opt/zello-bot
+sudo chown -R zello-bot:zello-bot /opt/zello-bot
+sudo chmod 600 .env          # sekrety tylko dla usługi
+```
+
+**3. Zainstaluj i uruchom:**
+
+```bash
 sudo cp zello-bot.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now zello-bot
 ```
 
+**4. Sprawdź:**
+
 ```bash
-systemctl status zello-bot
+systemctl status zello-bot          # active (running) = OK
+journalctl -u zello-bot -f          # logi na żywo (Ctrl+C, by wyjść)
+```
+
+Oczekiwany start: `Connected to MSSQL`, `Connected to Zello`, potem
+`Query OK — ...` co `POLL_INTERVAL` sekund.
+
+### Zmiana konfiguracji po instalacji
+
+`.env` i `query.sql` są czytane tylko przy starcie — po każdej zmianie restart:
+
+```bash
+sudo nano /opt/zello-bot/.env        # hasła, POLL_INTERVAL, flagi...
+sudo nano /opt/zello-bot/query.sql   # zapytanie o zamówienia
+sudo systemctl restart zello-bot
 journalctl -u zello-bot -f
 ```
+
+(`.env` ma prawa 600 i należy do `zello-bot` — edytujesz go przez `sudo`.)
+
+### Zarządzanie usługą
+
+```bash
+sudo systemctl restart zello-bot     # restart (po zmianie konfiguracji)
+sudo systemctl stop zello-bot        # zatrzymaj
+sudo systemctl start zello-bot       # start
+sudo systemctl status zello-bot      # stan
+journalctl -u zello-bot -f           # logi na żywo
+```
+
+### Najczęstsze problemy
+
+| Objaw w `journalctl` | Przyczyna | Naprawa |
+| --- | --- | --- |
+| `Permission denied` przy starcie | katalog nie należy do `zello-bot` | `sudo chown -R zello-bot:zello-bot /opt/zello-bot` |
+| restart w kółko + błąd ffmpeg/brak pliku | `SEND_VOICE=true`, a brak `audio/*.wav` | wrzuć plik WAV albo `SEND_VOICE=false` w `.env` |
+| `Query failed: Invalid column name` | złe zapytanie w `query.sql` | popraw i `sudo systemctl restart zello-bot` |
+| `logon rejected` / `not authorized` | złe dane Zello w `.env` (lub wygasły token) | popraw `.env` / wygeneruj nowy token, restart |
+
+Serwis działa bez roota (`zello-bot`, `NoNewPrivileges=true`), startuje
+automatycznie przy starcie systemu (`enable`) i sam się restartuje po awarii
+(`Restart=always`, przerwa 5 s).
 
 ## Głos (SEND_VOICE)
 
