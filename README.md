@@ -1,41 +1,53 @@
 # Zello Bot — MSSQL → Zello (tekst + głos)
 
-Lekki notifier: co `POLL_INTERVAL` sekund pyta MSSQL o nowy rekord, a gdy się
-pojawi — wysyła wiadomość tekstową (i opcjonalnie wcześniej nagrany komunikat
-głosowy WAV) na kanał **Zello Work**.
+Lekki notifier: co `POLL_INTERVAL` sekund wykonuje zapytanie z pliku
+**`query.sql`**; jeśli zwróci wiersz — wysyła powiadomienie (tekst i/lub
+wcześniej nagrany głos WAV) na kanał Zello. **Bot nie pamięta obsłużonych
+zamówień** — to samo zamówienie może dostać powiadomienie przy każdym pollingu,
+dopóki zapytanie je zwraca.
 
 ```text
-MSSQL → proste SELECT → nowy rekord → Zello (tekst, opcjonalnie głos WAV)
+MSSQL (read-only) → SELECT z query.sql → wiersz? → Zello (tekst, opcjonalnie głos WAV) → powtórz o interwał
 ```
 
-Brak zewnętrznych zależności poza: `pyodbc`, `websockets`, `python-dotenv`,
-`ffmpeg`, `libopus`, ODBC Driver 18.
+## Struktura
+
+```text
+.
+├── main.py          # punkt wejścia: serwis + komendy testowe
+├── config.py        # konfiguracja z .env
+├── db.py            # połączenie MSSQL (pyodbc) + ładowanie query.sql
+├── query.sql        # ← ZAPYTANIE — edytujesz TEN plik, nie kod
+├── zello.py         # klient Zello Channel API (Work / Friends & Family)
+├── audio.py         # WAV → FFmpeg → PCM 16 kHz → libopus → ramki 20 ms
+├── tests/           # testy: config, baza, pętla serwisu, zello, audio
+├── audio/           # tu wrzuć plik głosowy (VOICE_FILE)
+├── .env.example     # wzorzec konfiguracji
+├── zello-bot.service
+└── README.md
+```
 
 ## Jak działa
 
 1. Baza jest traktowana jako **tylko do odczytu** — bot wykonuje wyłącznie
-   `SELECT`, nigdy nic nie zapisuje (connection string zawiera
-   `ApplicationIntent=ReadOnly`). Konto MSSQL potrzebuje tylko `GRANT SELECT`.
-2. Bot **nie zapamiętuje** zamówień — nie ma tabeli stanu, checkpointu ani
-   zapisu `last_id`.
-3. Pętla: `SELECT TOP 1 ...` → jeśli zapytanie zwróciło wiersz → wyślij
-   powiadomienie (tekst i/lub głos, wg `SEND_TEXT` / `SEND_VOICE`) → odczekaj
-   `POLL_INTERVAL` → powtórz.
-4. Jeśli zapytanie **ciągle zwraca ten sam wiersz**, powiadomienie będzie
-   wysyłane za każdym razem — to zamierzone zachowanie. Warunek wyboru wiersza
-   (`WHERE ...`) ustawiasz sam w `GET_NEXT_ORDER_SQL`.
-5. Połączenie WebSocket z Zello jest trzymane otwarte; po zerwaniu: 5 s
-   przerwy, ponowne połączenie i logowanie (bez exponential backoff).
-6. Wiadomość uznajemy za wysłaną **dopiero po** odpowiedzi `{"seq": N, "success": true}`.
+   `SELECT` (connection string zawiera `ApplicationIntent=ReadOnly`; konto
+   MSSQL potrzebuje tylko `GRANT SELECT`).
+2. Zapytanie czyta z **`query.sql`** (fail-fast przy starcie: brak pliku,
+   pusty plik lub nie-SELECT = jasny błąd w logu).
+3. Pętla: `SELECT TOP 1 ...` → jeśli wiersz → wyślij powiadomienie (tekst i/lub
+   głos wg `SEND_TEXT` / `SEND_VOICE`) → odczekaj `POLL_INTERVAL` → powtórz.
+4. Połączenie WebSocket z Zello trzymane otwarte; po zerwaniu: 5 s przerwy,
+   ponowne połączenie i logowanie (bez exponential backoff).
+5. Wiadomość uznajemy za wysłaną **dopiero po** odpowiedzi
+   `{"seq": N, "success": true}`.
 
-Kolejność dla jednego powiadomienia: tekst → głos (wg flag). Jeśli głos się nie
-powiedzie, przy następnym pollingu powiadomienie zostanie wysłane ponownie —
-dla tej prostej wersji jest to świadomie zaakceptowane.
+Kolejność dla jednego powiadomienia: tekst → głos. Jeśli głos się nie powiedzie,
+przy następnym pollingu powiadomienie zostanie wysłane ponownie — dla tej
+prostej wersji świadomie zaakceptowane.
 
 ## Wymagania (Debian / Ubuntu)
 
 ```bash
-# Python 3.12+
 sudo apt-get update
 sudo apt-get install -y python3 python3-venv python3-pip
 
@@ -49,73 +61,77 @@ sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18 unixodbc
 sudo apt-get install -y ffmpeg libopus0
 ```
 
-Dla Ubuntu 22.04 podmień `24.04` na `22.04` w adresie repo; dla Debian zob.
-[dokumentację Microsoft](https://learn.microsoft.com/pl-pl/sql/connect/odbc/linux-mac/installing-the-microsoft-odbc-driver-for-sql-server).
+Dla Ubuntu 22.04 podmień `24.04` na `22.04`; dla Debian patrz dokumentacja
+Microsoft ODBC.
 
 ## Instalacja
 
 ```bash
-cd /opt/zello-bot                      # lub gdziekolwiek chcesz
+cd /opt/zello-bot
 
-python3 -m venv .venv
+python3 -m venv .venv            # NIE przez sudo!
 source .venv/bin/activate
 pip install -r requirements.txt
 
 cp .env.example .env
-nano .env                              # uzupełnij dane
+nano .env                        # uzupełnij dane
+nano query.sql                   # dostosuj zapytanie do swojej tabeli
 ```
 
-Bot nie używa żadnej tabeli stanu — nie musisz niczego tworzyć w bazie.
-
-Użytkownik MSSQL potrzebuje tylko: `SELECT` na tabeli zamówień.
-Nie używaj konta `sa`.
-
-## Zello: Work czy Friends & Family
-
-Bot obsługuje oba warianty — wybór robisz samym `.env`:
-
-**Zello Work** (płatne, ma trial):
+### `.env`
 
 ```env
-ZELLO_NETWORK=moja_siec      # nazwa sieci z konsoli zellowork.io
-ZELLO_USERNAME=sql_bot       # login użytkownika w sieci
-ZELLO_PASSWORD=HASLO         # jego hasło
-ZELLO_CHANNEL=Magazyn        # istniejący kanał, do którego dodany jest użytkownik
-# ZELLO_AUTH_TOKEN zostaje puste
+# --- MSSQL (jak w działającej aplikacji) ---
+MSSQL_SERVER=192.168.24.22\SERWISKOPB2B   # instancja nazwana, BEZ portu
+MSSQL_DATABASE=SerwisKop_Magazyn
+MSSQL_USERNAME=serwiskop-ro
+MSSQL_PASSWORD=haslo
+MSSQL_ENCRYPT=yes                          # stary serwer bez TLS 1.2 → no
+MSSQL_TRUST_SERVER_CERTIFICATE=yes
+
+# --- Zello Work (wss://zellowork.io/ws/{siec}) ---
+ZELLO_NETWORK=moja_siec
+ZELLO_USERNAME=sql_bot
+ZELLO_PASSWORD=haslo
+ZELLO_CHANNEL=Magazyn
+
+# --- LUB Zello Friends & Family (darmowe, wss://zello.io/ws) ---
+# Token z https://developers.zello.com/ (Keys → Sample Development Token,
+# ważny 30 dni). Gdy ustawiony, ZELLO_NETWORK jest ignorowany.
+ZELLO_AUTH_TOKEN=
+
+# --- Zachowanie ---
+POLL_INTERVAL=3
+SEND_TEXT=true
+SEND_VOICE=true
+VOICE_FILE=audio/new_order.wav
 ```
 
-**Zello Friends & Family** (darmowe):
+### Zapytanie — `query.sql`
 
-1. Załóż darmowe konto w aplikacji Zello (zello.com/downloads) — konto
-   anonimowe nie może wysyłać wiadomości.
-2. Wejdź na https://developers.zello.com/ → Login (login/hasło z aplikacji) →
-   uzupełnij profil developera → **Keys** → **Add Key**.
-3. Skopiuj **Sample Development Token** (ważny 30 dni) do `.env`:
+Jedyne miejsce, które dostosowujesz do swojej bazy (bez ruszania kodu):
 
-```env
-# ZELLO_NETWORK zostaje puste
-ZELLO_USERNAME=twoj_login_z_appki
-ZELLO_PASSWORD=twoje_haslo_z_appki
-ZELLO_CHANNEL=nazwa_kanału
-ZELLO_AUTH_TOKEN=pastek_toka_dev
+```sql
+SELECT TOP 1
+    id,
+    order_number
+FROM dbo.orders          -- ← nazwa Twojej tabeli
+WHERE id > 0             -- ← Twój warunek, np. status = 'oczekuje'
+ORDER BY id ASC;
 ```
 
-Bot sam wykryje tryb F&F (po ustawionym tokenie) i połączy się pod
-`wss://zello.io/ws`; przy reconnect używany jest `refresh_token` z serwera.
-
-> Token developerski wygasa po 30 dniach — wtedy powtórz kroki 2-3 i zaktualizuj
-> `.env`. Do produkcji Zello zaleca generowanie tokenów JWT na własnym serwerze
-> (Issuer + Private Key z developers.zello.com) — patrz dokumentacja Channel API.
+Wymagania: max 1 wiersz; kolumny `id` (do logów) i `order_number` (numer
+w wiadomości). Komentarze `--` na początku pliku są pomijane.
 
 ## Testy przed startem
 
 ```bash
-python main.py --test-db       # SELECT 1 — czy baza odpowiada
-python main.py --test-text     # "Test wiadomości z bota MSSQL" na kanał Zello
-python main.py --test-voice    # VOICE_FILE na kanał Zello
+python main.py --test-db        # SELECT 1 + walidacja query.sql
+python main.py --test-text      # "Test wiadomości z bota MSSQL" na kanał Zello
+python main.py --test-voice     # VOICE_FILE na kanał Zello
 ```
 
-Wszystkie kończą się kodem 0 przy sukcesie, kodem != 0 przy porażce.
+Kod 0 = sukces, kod != 0 = porażka.
 
 ## Uruchomienie
 
@@ -140,52 +156,25 @@ INFO Voice sent
 ```bash
 sudo useradd --system --no-create-home --shell /usr/sbin/nologin zello-bot
 sudo chown -R zello-bot:zello-bot /opt/zello-bot
-chmod 600 /opt/zello-bot/.env        # sekrety tylko dla właściciela
+sudo chmod 600 /opt/zello-bot/.env
 
 sudo cp zello-bot.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now zello-bot
 ```
 
-Podgląd logów:
-
 ```bash
 systemctl status zello-bot
 journalctl -u zello-bot -f
 ```
 
-## Dostosowanie zapytania o zamówienia
-
-Wszystko w jednym miejscu — w `main.py`:
-
-```python
-GET_NEXT_ORDER_SQL = """
-SELECT TOP 1
-    id,
-    order_number
-FROM dbo.orders
-WHERE id > 0          -- ← TU wpisz swój warunek (np. status = 'oczekuje')
-ORDER BY id ASC;
-"""
-```
-
-Podmień nazwę tabeli, kolumny i warunek `WHERE`. Wiersz musi zwracać `id`
-i `order_number` (tekst wyświetlany w wiadomości). Bot nie pamięta, co już
-wysłał — to warunek w `WHERE` decyduje, co jest "do wysłania" (np. status,
-flaga, data). Formatu wiadomości dotyczy `DEFAULT_TEXT`:
-
-```python
-DEFAULT_TEXT = "🔔 Nowe zamówienie: {}"
-```
-
 ## Głos (SEND_VOICE)
 
-`VOICE_FILE` to zwykły WAV (np. nagranie: *„Uwaga. Pojawiło się nowe
-zamówienie."*). Bot nie generuje TTS i nie podmienia danych w nagraniu —
-komunikat jest zawsze ten sam. Pipeline: `WAV → ffmpeg (-f s16le -ac 1 -ar
-16000) → PCM → libopus (ctypes) → ramki 20 ms → Zello (start_stream → dane →
-stop_stream)`. Żadnych pośrednich plików `.opus` na dysku; nagranie jest
-kodowane raz, przy starcie.
+`VOICE_FILE` to zwykły WAV (np. nagranie: „Uwaga. Pojawiło się nowe
+zamówienie."). Bot nie generuje TTS. Pipeline: `WAV → ffmpeg (-f s16le -ac 1
+-ar 16000) → PCM → libopus (ctypes) → ramki 20 ms → Zello (start_stream →
+dane → stop_stream)`. Plik jest kodowany raz, przy starcie (brak pośredniego
+`.opus` na dysku); brak pliku = fail-fast z jasnym błędem.
 
 ## Testy jednostkowe
 
@@ -194,5 +183,5 @@ pip install -r requirements-dev.txt
 pytest tests -q
 ```
 
-WebSocket Zello, FFmpeg, libopus i MSSQL są w testach zamockowane — nie trzeba
-uruchamiać serwisów.
+WebSocket Zello, FFmpeg, libopus i MSSQL są zamockowane — nie trzeba
+uruchamiać żadnych serwisów.
