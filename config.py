@@ -38,6 +38,7 @@ def load_config(env_file: str | None = None) -> SimpleNamespace:
         mssql_password=_env("MSSQL_PASSWORD", required=True),
         mssql_encrypt=_env("MSSQL_ENCRYPT", "yes"),
         mssql_trust_server_certificate=_env("MSSQL_TRUST_SERVER_CERTIFICATE", "yes"),
+        user_mapping_file=_env("USER_MAPPING_FILE", "user_mapping.json"),
         # Zello: Work (ZELLO_NETWORK) LUB Friends & Family (ZELLO_AUTH_TOKEN)
         zello_network=_env("ZELLO_NETWORK"),
         zello_username=_env("ZELLO_USERNAME", required=True),

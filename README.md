@@ -7,22 +7,25 @@ zamówień** — to samo zamówienie może dostać powiadomienie przy każdym po
 dopóki zapytanie je zwraca.
 
 ```text
-MSSQL (read-only) → SELECT z query.sql → wiersz? → Zello (tekst, opcjonalnie głos WAV) → powtórz o interwał
+MSSQL (read-only) → SELECT z query.sql → jest 'new'? → Zello (tekst, opcjonalnie głos WAV) do wszystkich oprócz zajętych → powtórz o interwał
 ```
 
 ## Struktura
 
 ```text
 .
-├── main.py          # punkt wejścia: serwis + komendy testowe
-├── config.py        # konfiguracja z .env
-├── db.py            # połączenie MSSQL (pyodbc) + ładowanie query.sql
-├── query.sql        # ← ZAPYTANIE — edytujesz TEN plik, nie kod
-├── zello.py         # klient Zello Channel API (Work / Friends & Family)
-├── audio.py         # WAV → FFmpeg → PCM 16 kHz → libopus → ramki 20 ms
-├── tests/           # testy: config, baza, pętla serwisu, zello, audio
-├── audio/           # tu wrzuć plik głosowy (VOICE_FILE)
-├── .env.example     # wzorzec konfiguracji
+├── main.py                # punkt wejścia: serwis + komendy testowe
+├── config.py              # konfiguracja z .env
+├── db.py                  # połączenie MSSQL (pyodbc) + fetch_orders (query.sql)
+├── users.py               # user_mapping.json + wyliczanie odbiorców (minus zajęci)
+├── query.sql              # ← ZAPYTANIE — edytujesz TEN plik, nie kod
+├── user_mapping.json      # ← MAPOWANIE ModifiedBy → nazwa Zello (Twój plik)
+├── user_mapping.example.json  # wzorzec mapowania do skopiowania
+├── zello.py               # klient Zello Channel API (Work / Friends & Family)
+├── audio.py               # WAV → FFmpeg → PCM 16 kHz → libopus → ramki 20 ms
+├── tests/                 # testy: config, baza, pętla serwisu, zello, audio, users
+├── audio/                 # tu wrzuć plik głosowy (VOICE_FILE)
+├── .env.example           # wzorzec konfiguracji
 ├── zello-bot.service
 └── README.md
 ```
@@ -33,9 +36,16 @@ MSSQL (read-only) → SELECT z query.sql → wiersz? → Zello (tekst, opcjonaln
    `SELECT` (connection string zawiera `ApplicationIntent=ReadOnly`; konto
    MSSQL potrzebuje tylko `GRANT SELECT`).
 2. Zapytanie czyta z **`query.sql`** (fail-fast przy starcie: brak pliku,
-   pusty plik lub nie-SELECT = jasny błąd w logu).
-3. Pętla: `SELECT TOP 1 ...` → jeśli wiersz → wyślij powiadomienie (tekst i/lub
-   głos wg `SEND_TEXT` / `SEND_VOICE`) → odczekaj `POLL_INTERVAL` → powtórz.
+   pusty plik lub nie-SELECT = jasny błąd w logu). Zwraca **listę zamówień**
+   z kolumnami `OriginalNumber`, `DocumentStatusText` (status:
+   `new` / `in_progress`) i `ModifiedBy` (kto obsługuje). Kolumny
+   rozpoznawane po nazwach — kolejność w SELECT nie ma znaczenia.
+3. Pętla: jeśli **jest ≥1 zamówienie `new`** → powiadomienie do **wszystkich
+   użytkowników z `user_mapping.json` MINUS ci, którzy mają zamówienie
+   `in_progress`** (wg `ModifiedBy`). Każda osoba dostaje wiadomość osobno
+   (atrybut `for` protokołu Zello — wiadomość trafia tylko do niej). Brak
+   `new` → cisza. **Bot nie pamięta obsłużonych zamówień** — ten sam numer
+   dostanie powiadomienie przy każdym pollingu, dopóki zapytanie go zwraca.
 4. Połączenie WebSocket z Zello trzymane otwarte; po zerwaniu: 5 s przerwy,
    ponowne połączenie i logowanie (bez exponential backoff).
 5. Wiadomość uznajemy za wysłaną **dopiero po** odpowiedzi
@@ -92,6 +102,8 @@ pip install -r requirements.txt
 ```bash
 cp .env.example .env
 nano .env          # uzupełnij MSSQL + Zello (wzór niżej)
+cp user_mapping.example.json user_mapping.json
+nano user_mapping.json   # mapowanie: login MSSQL → nazwa Zello
 nano query.sql     # wpisz nazwę swojej tabeli zamówień
 ```
 
@@ -114,6 +126,7 @@ MSSQL_USERNAME=2
 MSSQL_PASSWORD=haslo
 MSSQL_ENCRYPT=yes                          # stary serwer bez TLS 1.2 → no
 MSSQL_TRUST_SERVER_CERTIFICATE=yes
+USER_MAPPING_FILE=user_mapping.json        # mapowanie ModifiedBy → nazwa Zello
 
 # --- Zello Work (wss://zellowork.io/ws/{siec}) ---
 ZELLO_NETWORK=moja_siec
@@ -134,27 +147,43 @@ SEND_VOICE=true
 VOICE_FILE=audio/new_order.wav
 ```
 
+### Wzór `user_mapping.json`
+
+```json
+{
+  "jan.kowalski": "jan.kowalski",
+  "anna.nowak": "anna.nowak"
+}
+```
+
+Klucz = login MSSQL (wartość kolumny `ModifiedBy` z query.sql), wartość =
+nazwa użytkownika Zello. **Wartości = pełna lista osób, które mogą dostawać
+powiadomienia.** Odbiorcy = wszyscy z listy MINUS ci, którzy mają zamówienie
+`in_progress`. Użytkownik, którego login MSSQL nie ma wpisu w mapowaniu,
+NIE może być wykluczony (log z ostrzeżeniem).
+
 ### Wzór `query.sql`
 
 Jedyne miejsce, które dostosowujesz do swojej bazy (bez ruszania kodu):
 
 ```sql
-SELECT TOP 1
-    OriginalNumber        -- ← numer zamówienia (np. Twoja kolumna OriginalNumber)
-FROM dbo.orders          -- ← nazwa Twojej tabeli
-WHERE id > 0             -- ← Twój warunek, np. status = 'oczekuje'
-ORDER BY id ASC;
+SELECT OriginalNumber, ModifiedBy, DocumentStatusText
+FROM dbo.orders          -- ← Twoja tabela
+WHERE ...                -- ← Twój warunek (np. status IN ('new','in_progress'))
 ```
 
-Wymagania: max 1 wiersz; **co najmniej 1 kolumna = numer zamówienia**
-(pokazywany w wiadomości). Opcjonalnie druga kolumna `id` (liczba, tylko do
-logów) — wtedy w kolejności: `id, numer`. Komentarze `--` na początku pliku
-są pomijane.
+Wymagania: kolumny `OriginalNumber` (numer), `DocumentStatusText` (status:
+`new` / `in_progress`; alias `Status` też działa), `ModifiedBy` (kto
+obsługuje) — rozpoznawane **po nazwach**, kolejność nie ma znaczenia.
+Opcjonalnie `Id` (liczba, tylko do logów). **Bez TOP(1)/LIMITU** — bot
+potrzebuje całej listy zamówień, żeby wykluczyć wszystkich zajętych.
+Komentarze `--` na początku pliku są pomijane.
 
 ## Testy przed startem
 
 ```bash
-python main.py --test-db        # SELECT 1 + walidacja query.sql
+python main.py --test-db        # SELECT 1 + walidacja query.sql + user_mapping.json
+                                # + wykonanie prawdziwego zapytania i wydruk „wysłałbyś do: ..."
 python main.py --test-text      # "Test wiadomości z bota MSSQL" na kanał Zello
 python main.py --test-voice     # VOICE_FILE na kanał Zello
 ```
@@ -170,15 +199,12 @@ python main.py
 Oczekiwane logi:
 
 ```text
-INFO Connected to MSSQL
 INFO Connected to Zello
 INFO Channel Magazyn online
-INFO Query OK — new order: ZAM/2026/00123 (id=None)
-INFO Text sent
-INFO Sending voice
-INFO Voice sent
-INFO Query OK — no new orders
-INFO Query OK — no new orders
+INFO Connected to MSSQL (192.168.24.22\SERWISKOPB2B)
+INFO Query OK — 1 nowych zamówień; powiadomiono: jan.kowalski
+INFO Query OK — brak nowych zamówień (3 wiersze)
+INFO Query OK — brak nowych zamówień (3 wiersze)
 ```
 
 Każdy poll jest logowany (czy zapytanie poleciało i co zwróciło). Przy
@@ -252,6 +278,8 @@ journalctl -u zello-bot -f           # logi na żywo
 | `Permission denied` przy starcie | katalog nie należy do `zello-bot` | `sudo chown -R zello-bot:zello-bot /opt/zello-bot` |
 | restart w kółko + błąd ffmpeg/brak pliku | `SEND_VOICE=true`, a brak `audio/*.wav` | wrzuć plik WAV albo `SEND_VOICE=false` w `.env` |
 | `Query failed: Invalid column name` | złe zapytanie w `query.sql` | popraw i `sudo systemctl restart zello-bot` |
+| `Brak pliku mapowania: user_mapping.json` | nie utworzono mapowania | `cp user_mapping.example.json user_mapping.json` i uzupełnij, restart |
+| `ModifiedBy=... nie ma wpisu w user_mapping.json` | osoba bez wpisu w mapowaniu | dodaj wpis `"login_mssql": "nazwa_zello"` — inaczej nie da się jej wykluczyć |
 | `logon rejected` / `not authorized` | złe dane Zello w `.env` (lub wygasły token) | popraw `.env` / wygeneruj nowy token, restart |
 
 Serwis działa bez roota (`zello-bot`, `NoNewPrivileges=true`), startuje

@@ -1,24 +1,26 @@
 -- ============================================================================
 -- ZAPYTANIE O ZAMÓWIENIA — edytuj TEN plik, nie kod!
 -- ============================================================================
--- Bot wykonuje to zapytanie co POLL_INTERVAL sekund. Jeśli zwróci wiersz —
--- wysyła powiadomienie na kanał Zello (nawet jeśli to ten sam wiersz, co
--- w poprzednim pollingu — bot nie pamięta obsłużonych zamówień).
+-- Bot wykonuje to zapytanie co POLL_INTERVAL sekund i dostaje LISTĘ zamówień.
+-- Każdy wiersz musi zawierać (nazwy kolumn — kolejność NIE ma znaczenia):
+--   * OriginalNumber (lub OrderNumber)  — numer zamówienia,
+--   * DocumentStatusText (lub Status)   — status: 'new' lub 'in_progress',
+--   * ModifiedBy                        — kto obsługuje zamówienie,
+--   * Id (opcjonalnie)                  — tylko do logów.
 --
--- Wymagania:
---   * max 1 wiersz (TOP 1),
---   * co najmniej 1 kolumna = numer zamówienia pokazywany w wiadomości
---     (u Ciebie: OriginalNumber),
---   * opcjonalnie druga kolumna `id` (liczba) — tylko do logów; wtedy
---     kolejność: id, numer.
+-- Zachowanie bota:
+--   * jest >= 1 wiersz ze statusem 'new'  → powiadomienie do WSZYSTKICH
+--     użytkowników z user_mapping.json MINUS ci, którzy mają zamówienie
+--     ze statusem 'in_progress' (po kolumnie ModifiedBy),
+--   * brak wierszy 'new'                  → brak powiadomienia.
 --
--- Własny warunek wpisz w WHERE (np. status = 'oczekuje'), a kolumnę
--- sortowania / warunku dostosuj do swojej tabeli.
+-- WAŻNE: bez TOP(1) / LIMITU! Do wykluczania zajętych bot potrzebuje
+-- CAŁEJ listy dzisiejszych zamówień, nie jednego wiersza.
 -- ============================================================================
 
-SELECT TOP(1)OriginalNumber
+SELECT OriginalNumber,ModifiedBy,DocumentStatusText
   FROM [SerwisKop_Magazyn].[Document].[Documents]
   WHERE DocumentType = 7
-  AND DateCreatedUtc >= '2026-06-01'
-  AND DocumentStatusText = 'new'
+  AND DateCreatedUtc >= CAST(GETDATE() AS DATE)
+  AND DocumentStatusText IN ('new', 'in_progress')
   AND SubType = 50

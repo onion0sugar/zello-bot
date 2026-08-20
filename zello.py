@@ -233,41 +233,57 @@ class Zello:
                 "not logged in (sprawdź dane Zello w .env: ZELLO_USERNAME/ZELLO_PASSWORD)"
             ) from exc
 
-    async def send_text_message(self, channel: str, text: str) -> None:
+    async def send_text_message(
+        self, channel: str, text: str, for_user: str | None = None
+    ) -> None:
+        """Wyślij tekst na kanał; ``for_user`` zawęża odbiorcę do jednej osoby.
+
+        Bez ``for_user`` wiadomość trafia do całego kanału. Z ``for_user`` —
+        tylko do wskazanego użytkownika (atrybut ``for`` protokołu Zello).
+        """
         if self._ws is None:
             raise ZelloError("not connected")
         await self.wait_logged_in()
         if self._wait_online:
             await self.wait_ready()
-        seq, future = await self._send(
-            {
-                "command": "send_text_message",
-                "seq": self._next_seq(),
-                "channel": channel,
-                "text": text,
-            }
-        )
+        payload = {
+            "command": "send_text_message",
+            "seq": self._next_seq(),
+            "channel": channel,
+            "text": text,
+        }
+        if for_user:
+            payload["for"] = for_user
+        seq, future = await self._send(payload)
         response = await self._await_response(seq, future)
         if not response.get("success"):
             raise ZelloSendError(str(response.get("error", "unknown error")))
 
-    async def send_voice(self, channel: str, packets: list[bytes], codec_header: str) -> None:
+    async def send_voice(
+        self,
+        channel: str,
+        packets: list[bytes],
+        codec_header: str,
+        for_user: str | None = None,
+    ) -> None:
+        """Wyślij głos na kanał; ``for_user`` zawęża odbiorcę do jednej osoby."""
         if self._ws is None:
             raise ZelloError("not connected")
         await self.wait_logged_in()
         if self._wait_online:
             await self.wait_ready()
-        seq, future = await self._send(
-            {
-                "command": "start_stream",
-                "seq": self._next_seq(),
-                "channel": channel,
-                "type": "audio",
-                "codec": "opus",
-                "codec_header": codec_header,
-                "packet_duration": VOICE_FRAME_MS,
-            }
-        )
+        payload = {
+            "command": "start_stream",
+            "seq": self._next_seq(),
+            "channel": channel,
+            "type": "audio",
+            "codec": "opus",
+            "codec_header": codec_header,
+            "packet_duration": VOICE_FRAME_MS,
+        }
+        if for_user:
+            payload["for"] = for_user
+        seq, future = await self._send(payload)
         response = await self._await_response(seq, future)
         if not response.get("success"):
             raise ZelloSendError(f"start_stream: {response.get('error', 'unknown error')}")

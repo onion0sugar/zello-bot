@@ -22,7 +22,8 @@ from types import SimpleNamespace
 
 from audio import VoiceFileError, codec_header, encode_opus, wav_to_pcm
 from config import ConfigError, load_config
-from db import DbError, connect_db, get_next_order, load_query
+from db import DbError, connect_db, fetch_orders, load_query
+from users import load_mapping, recipients
 from zello import Zello, ZelloError
 
 logger = logging.getLogger("bot")
@@ -59,24 +60,14 @@ def load_voice_packets(cfg: SimpleNamespace) -> list[bytes]:
     return packets
 
 
-async def notify(
-    z: Zello, cfg: SimpleNamespace, order_number: str, voice_packets: list[bytes]
-) -> None:
-    if cfg.send_text:
-        await z.send_text_message(cfg.zello_channel, DEFAULT_TEXT.format(order_number))
-        logger.info("Text sent")
-    if cfg.send_voice:
-        logger.info("Sending voice")
-        await z.send_voice(cfg.zello_channel, voice_packets, codec_header())
-        logger.info("Voice sent")
-
-
 # --- pętla serwisu ------------------------------------------------------------
 
 
 async def run_service(cfg: SimpleNamespace, stop: asyncio.Event | None = None) -> int:
     stop = stop or asyncio.Event()
     query = load_query()  # fail-fast: zły query.sql widać od razu przy starcie
+    # fail-fast: brak user_mapping.json = błąd konfiguracji (jak brak query.sql)
+    mapping = load_mapping(cfg.user_mapping_file)
 
     voice_packets = load_voice_packets(cfg) if cfg.send_voice else []
 
@@ -99,14 +90,36 @@ async def run_service(cfg: SimpleNamespace, stop: asyncio.Event | None = None) -
             if db is None:
                 db = connect_db(cfg)
             with db.cursor() as cursor:
-                order = get_next_order(cursor, query)
-            if order:
-                order_id, order_number = order
-                logger.info("Query OK — new order: %s (id=%s)", order_number, order_id)
-                await notify(z, cfg, order_number, voice_packets)
+                orders = fetch_orders(cursor, query)
+            new_orders = [o for o in orders if o.status == "new"]
+            if new_orders:
+                targets = recipients(mapping, orders)
+                if not targets:
+                    logger.info(
+                        "Query OK — %d nowych zamówień, ale wszyscy zajęci — brak wysyłki",
+                        len(new_orders),
+                    )
+                else:
+                    numbers = ", ".join(o.number for o in new_orders)
+                    if len(new_orders) == 1:
+                        text = DEFAULT_TEXT.format(numbers)
+                    else:
+                        text = "🔔 Nowe zamówienia: {}".format(numbers)
+                    for user in targets:
+                        if cfg.send_text:
+                            await z.send_text_message(cfg.zello_channel, text, for_user=user)
+                        if cfg.send_voice:
+                            await z.send_voice(
+                                cfg.zello_channel, voice_packets, codec_header(), for_user=user
+                            )
+                    logger.info(
+                        "Query OK — %d nowych zamówień; powiadomiono: %s",
+                        len(new_orders),
+                        ", ".join(targets),
+                    )
             else:
-                logger.info("Query OK — no new orders")
-            # stały rytm pollingu — także gdy zapytanie ciągle zwraca ten sam wiersz
+                logger.info("Query OK — brak nowych zamówień (%d wierszy)", len(orders))
+            # stały rytm pollingu — także gdy zapytanie ciągle zwraca te same wiersze
             await asyncio.wait_for(stop.wait(), timeout=cfg.poll_interval)
         except asyncio.TimeoutError:
             pass  # przerwa pollingu — oczekiwane zachowanie, nie błąd
@@ -136,18 +149,42 @@ async def run_service(cfg: SimpleNamespace, stop: asyncio.Event | None = None) -
 
 
 def test_db(cfg: SimpleNamespace) -> int:
+    """Sprawdza połączenie, query.sql, mapowanie — i pokazuje planowaną wysyłkę.
+
+    Wykonuje PRAWDZIWE zapytanie z query.sql i wypisuje wiersze + listę
+    odbiorców, których by powiadomił (bez wysyłania czegokolwiek).
+    """
+    db = None
+    orders = []
+    mapping = {}
     try:
         db = connect_db(cfg)
         with db.cursor() as cursor:
             cursor.execute("SELECT 1")
             row = cursor.fetchone()
             assert row and row[0] == 1
-        db.close()
         query = load_query()  # walidacja pliku zapytania
+        mapping = load_mapping(cfg.user_mapping_file)  # walidacja mapowania
+        with db.cursor() as cursor:
+            orders = fetch_orders(cursor, query)  # prawdziwe zapytanie
     except Exception as exc:
         logger.error("DB test FAILED: %s", exc)
         return 1
-    logger.info("DB test OK — SELECT 1 returned 1; query.sql loaded (%d chars)", len(query))
+    finally:
+        if db is not None:
+            db.close()
+    logger.info(
+        "DB test OK — SELECT 1 OK; query.sql zwrócił %d zamówień:", len(orders)
+    )
+    for o in orders:
+        logger.info(
+            "  %s | status=%s | ModifiedBy=%s", o.number or o.order_id, o.status, o.modified_by
+        )
+    targets = recipients(mapping, orders)
+    logger.info(
+        "Wysłałbyś do: %s",
+        ", ".join(targets) if targets else "(nikt — brak nowych lub wszyscy zajęci)",
+    )
     return 0
 
 

@@ -11,20 +11,22 @@ import pytest
 
 import db
 from config import load_config
-from db import DbError, build_dsn, get_next_order, load_query
+from db import DbError, Order, build_dsn, fetch_orders, load_query
 
 
 class FakeCursor:
-    def __init__(self, row):
-        self.row = row
+    """Podróbka kursora: opis kolumn + wiersze (jak prawdziwy pyodbc)."""
+
+    def __init__(self, rows, description):
+        self.rows = rows
+        self.description = description
         self.executed = []
 
     def execute(self, sql, params=None):
         self.executed.append((sql, params))
-        self._result = self.row
 
-    def fetchone(self):
-        return self._result
+    def fetchall(self):
+        return self.rows
 
 
 class FakeConnection:
@@ -49,7 +51,7 @@ class FakePyodbc:
         self.last_dsn = dsn
         if self.fail:
             raise Exception("08001 can't connect")  # symulacja pyodbc.Error
-        return FakeConnection(FakeCursor(None))
+        return FakeConnection(FakeCursor([], []))
 
 
 def make_cfg(**overrides) -> SimpleNamespace:
@@ -98,10 +100,12 @@ def test_dsn_custom_port():
 
 
 def test_query_file_ships_valid_select():
-    """Wzorcowy query.sql z repozytorium ładuje się i zwraca numer zamówienia."""
+    """Wzorcowy query.sql z repozytorium ładuje się pod nowy kontrakt."""
     sql = load_query()  # realny plik w projekcie
-    assert sql.lstrip().upper().startswith("SELECT TOP 1")
+    assert sql.lstrip().upper().startswith("SELECT")
     assert "OriginalNumber" in sql
+    assert "ModifiedBy" in sql
+    assert "DocumentStatusText" in sql
 
 
 def test_load_query_missing_file_raises(tmp_path):
@@ -129,46 +133,76 @@ def test_load_query_reads_file(tmp_path):
     assert load_query(str(path)) == "SELECT 1"
 
 
-# --- zapytanie -------------------------------------------------------------------
+# --- fetch_orders -----------------------------------------------------------------
+
+DESC_FULL = [
+    ("id",), ("OriginalNumber",), ("DocumentStatusText",), ("ModifiedBy",),
+]
 
 
-def test_get_next_order_returns_row():
-    cursor = FakeCursor((101, "ZAM/2026/1234"))
-    order = get_next_order(cursor, "SELECT TOP 1 id, order_number FROM dbo.orders")
-    assert order == (101, "ZAM/2026/1234")
-    sql, params = cursor.executed[0]
-    assert sql == "SELECT TOP 1 id, order_number FROM dbo.orders"
-    assert params is None  # bez parametrów — bot nie pamięta last_id
+def test_fetch_orders_parses_by_column_name():
+    cursor = FakeCursor(
+        [(1, "ZAM/2026/1234", "new", "jan.kowalski")], DESC_FULL,
+    )
+    orders = fetch_orders(cursor, "SELECT ...")
+    assert orders == [Order(1, "ZAM/2026/1234", "new", "jan.kowalski")]
+    assert cursor.executed[0][0] == "SELECT ..."
 
 
-def test_get_next_order_none_when_no_row():
-    assert get_next_order(FakeCursor(None), "SELECT 1") is None
+def test_fetch_orders_column_order_is_irrelevant():
+    desc = [("ModifiedBy",), ("OriginalNumber",), ("DocumentStatusText",)]
+    cursor = FakeCursor([("anna.nowak", "ZAM/2", "in progress")], desc)
+    orders = fetch_orders(cursor, "SELECT 1")
+    assert orders == [Order(None, "ZAM/2", "in_progress", "anna.nowak")]
 
 
-def test_get_next_order_null_order_number_becomes_empty():
-    order = get_next_order(FakeCursor((101, None)), "SELECT 1")
-    assert order == (101, "")
+def test_fetch_orders_normalizes_status_spelling():
+    desc = [("OriginalNumber",), ("Status",), ("ModifiedBy",)]
+    cursor = FakeCursor(
+        [("Z1", "in_progress", "a"), ("Z2", "In Progress", "b"), ("Z3", "NEW", "c")],
+        desc,
+    )
+    orders = fetch_orders(cursor, "SELECT 1")
+    assert [o.status for o in orders] == ["in_progress", "in_progress", "new"]
 
 
-def test_get_next_order_single_column_only():
-    """Zapytanie zwraca sam numer (np. OriginalNumber) — id = None."""
-    order = get_next_order(FakeCursor(("ZAM/2026/1234",)), "SELECT 1")
-    assert order == (None, "ZAM/2026/1234")
+def test_fetch_orders_accepts_status_alias():
+    desc = [("OriginalNumber",), ("Status",), ("ModifiedBy",)]
+    cursor = FakeCursor([("Z1", "new", "a")], desc)
+    assert fetch_orders(cursor, "SELECT 1") == [Order(None, "Z1", "new", "a")]
 
 
-def test_get_next_order_non_numeric_id_is_tolerated():
-    row = ("ZAM/2026/1234", "Klient")  # 2 kolumny, id nie jest liczbą
-    order = get_next_order(FakeCursor(row), "SELECT 1")
-    assert order == (None, "Klient")  # id tylko do logów — nie blokuje wysyłki
+def test_fetch_orders_missing_required_column_raises():
+    desc = [("OriginalNumber",), ("DocumentStatusText",)]  # brak ModifiedBy
+    cursor = FakeCursor([("Z1", "new")], desc)
+    with pytest.raises(DbError, match="ModifiedBy"):
+        fetch_orders(cursor, "SELECT 1")
 
 
-def test_get_next_order_wraps_db_errors():
+def test_fetch_orders_no_rows_returns_empty_list():
+    cursor = FakeCursor([], DESC_FULL)
+    assert fetch_orders(cursor, "SELECT 1") == []
+
+
+def test_fetch_orders_null_values_become_empty_strings():
+    cursor = FakeCursor([(None, None, None, None)], DESC_FULL)
+    orders = fetch_orders(cursor, "SELECT 1")
+    assert orders == [Order(None, "", "", "")]
+
+
+def test_fetch_orders_optional_id_non_numeric_tolerated():
+    desc = [("id",), ("OriginalNumber",), ("DocumentStatusText",), ("ModifiedBy",)]
+    cursor = FakeCursor([("ABC", "Z1", "new", "a")], desc)  # id nie jest liczbą
+    assert fetch_orders(cursor, "SELECT 1") == [Order(None, "Z1", "new", "a")]
+
+
+def test_fetch_orders_wraps_db_errors():
     class BoomCursor:
         def execute(self, sql, params=None):
             raise RuntimeError("table not found")
 
     with pytest.raises(DbError, match="Query failed"):
-        get_next_order(BoomCursor(), "SELECT 1")
+        fetch_orders(BoomCursor(), "SELECT 1")
 
 
 # --- connect_db -------------------------------------------------------------------

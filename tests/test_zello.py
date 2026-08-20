@@ -120,6 +120,29 @@ class ZelloTests(unittest.IsolatedAsyncioTestCase):
         assert payload["channel"] == CHANNEL
         assert payload["text"] == "Test wiadomości"
         assert payload["seq"] == 2
+        assert "for" not in payload  # broadcast — bez zawężenia odbiorcy
+        await z.close()
+
+    async def test_send_text_message_to_single_user(self):
+        ws = responsive_ws()
+        z = make_zello(ws)
+        await z.start()
+        await z.wait_ready()
+        await z.send_text_message(CHANNEL, "Test wiadomości", for_user="jan.kowalski")
+        payload = json.loads(ws.sent[1])
+        assert payload["command"] == "send_text_message"
+        assert payload["for"] == "jan.kowalski"  # tylko ten użytkownik go zobaczy
+        await z.close()
+
+    async def test_send_voice_to_single_user(self):
+        ws = responsive_ws()
+        z = make_zello(ws)
+        await z.start()
+        await z.wait_ready()
+        await z.send_voice(CHANNEL, [b"\x11\x22"], "gD4BFA==", for_user="anna.nowak")
+        start = json.loads(ws.sent[1])
+        assert start["command"] == "start_stream"
+        assert start["for"] == "anna.nowak"
         await z.close()
 
     async def test_send_text_message_rejected_raises(self):

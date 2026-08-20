@@ -50,6 +50,7 @@ def test_defaults(monkeypatch):
     assert cfg.send_voice is True
     assert cfg.zello_auth_token == ""
     assert cfg.zello_wait_online is True
+    assert cfg.user_mapping_file == "user_mapping.json"
 
 
 def test_flags_parsed(monkeypatch):

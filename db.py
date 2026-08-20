@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import os
+from dataclasses import dataclass
 from types import SimpleNamespace
 
 try:
@@ -96,30 +97,83 @@ def connect_db(cfg: SimpleNamespace):
 # --- zapytanie ------------------------------------------------------------------
 
 
-def get_next_order(cursor, query: str) -> tuple[int | None, str] | None:
-    """Wykonaj zapytanie z query.sql. Wiersz → powiadomienie (bez pamiętania).
+@dataclass(frozen=True)
+class Order:
+    """Jeden wiersz z query.sql: numer zamówienia + status + kto obsługuje."""
 
-    Obsługuje zapytania zwracające:
-    * 1 kolumnę — sam numer zamówienia (np. OriginalNumber),
-    * 2 kolumny — id (liczba, tylko do logów) + numer zamówienia.
+    order_id: int | None      # opcjonalne (kolumna Id) — tylko do logów
+    number: str               # numer zamówienia (OriginalNumber)
+    status: str               # znormalizowany: 'new' | 'in_progress' | inne
+    modified_by: str          # login MSSQL osoby obsługującej (ModifiedBy)
 
-    Zwraca (order_id, order_number); order_id = None, gdy brak kolumny id
-    lub nie jest liczbą.
+
+def normalize_status(value) -> str:
+    """Normalizuje status: 'In Progress'/'in progress' → 'in_progress'.
+
+    Baza może zwracać obie pisownie — sprowadzamy do jednej kanonicznej.
+    """
+    if value is None:
+        return ""
+    return str(value).strip().lower().replace(" ", "_")
+
+
+def fetch_orders(cursor, query: str) -> list[Order]:
+    """Wykonaj zapytanie z query.sql; zwróć listę zamówień.
+
+    Kolumny rozpoznawane PO NAZWACH (kolejność w SELECT nie ma znaczenia):
+      * OriginalNumber (lub OrderNumber) — numer zamówienia,
+      * ModifiedBy — kto obsługuje zamówienie,
+      * DocumentStatusText (lub Status) — status ('new' / 'in_progress'),
+      * Id (opcjonalnie, liczba) — tylko do logów.
+    Brak wymaganej kolumny = fail-fast z listą znalezionych kolumn.
     """
     try:
         cursor.execute(query)
-        row = cursor.fetchone()
+        description = cursor.description or []
+        columns = [str(col[0]).strip().lower() if col[0] else "" for col in description]
     except Exception as exc:
         raise DbError(f"Query failed: {exc}") from exc
-    if row is None:
+
+    def find(*names: str) -> int | None:
+        for name in names:
+            for i, col in enumerate(columns):
+                if col == name:
+                    return i
         return None
-    if len(row) >= 2:
-        order_number = "" if row[1] is None else str(row[1])
-        try:
-            order_id: int | None = int(row[0])
-        except (TypeError, ValueError):
-            order_id = None  # nie-liczbowe id — niepotrzebne do wysyłki
-        return order_id, order_number
-    # jedna kolumna — sam numer zamówienia
-    order_number = "" if row[0] is None else str(row[0])
-    return None, order_number
+
+    idx_number = find("originalnumber", "ordernumber")
+    idx_status = find("documentstatustext", "status")
+    idx_modified = find("modifiedby")
+    idx_id = find("id")
+    missing = [
+        name
+        for name, idx in (
+            ("OriginalNumber/OrderNumber", idx_number),
+            ("DocumentStatusText/Status", idx_status),
+            ("ModifiedBy", idx_modified),
+        )
+        if idx is None
+    ]
+    if missing:
+        raise DbError(
+            f"query.sql musi zwracać kolumny: {', '.join(missing)}. "
+            f"Znaleziono: {', '.join(columns) or '(brak)'}"
+        )
+
+    rows: list[Order] = []
+    try:
+        for row in cursor.fetchall():
+            number = "" if row[idx_number] is None else str(row[idx_number]).strip()
+            modified_by = (
+                "" if row[idx_modified] is None else str(row[idx_modified]).strip()
+            )
+            order_id: int | None = None
+            if idx_id is not None and row[idx_id] is not None:
+                try:
+                    order_id = int(row[idx_id])
+                except (TypeError, ValueError):
+                    order_id = None  # nie-liczbowe id — niepotrzebne do logów
+            rows.append(Order(order_id, number, normalize_status(row[idx_status]), modified_by))
+    except Exception as exc:
+        raise DbError(f"Query failed: {exc}") from exc
+    return rows
