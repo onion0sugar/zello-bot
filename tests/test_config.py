@@ -71,6 +71,14 @@ def test_flags_parsed(monkeypatch):
     assert cfg.announce_interval == 45
 
 
+def test_announce_interval_zero_allowed(monkeypatch):
+    values = dict(REQUIRED)
+    values["ANNOUNCE_INTERVAL"] = "0"  # 0 = wysyłaj raz na poll
+    _set_env(monkeypatch, values)
+    cfg = load_config()
+    assert cfg.announce_interval == 0
+
+
 def test_fnf_auth_token_and_network_both_loaded(monkeypatch):
     values = dict(REQUIRED)
     values["ZELLO_AUTH_TOKEN"] = "dev-token"

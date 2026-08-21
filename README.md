@@ -36,9 +36,11 @@ MSSQL (read-only) → SELECT z query.sql → wiersz? → Zello (tekst, opcjonaln
    pusty plik lub nie-SELECT = jasny błąd w logu).
 3. Pętla: `SELECT TOP 1 ...` → jeśli wiersz → wyślij powiadomienie (tekst i/lub
    głos wg `SEND_TEXT` / `SEND_VOICE`) → odczekaj `POLL_INTERVAL` → powtórz.
-   **Powtarzanie:** dopóki zapytanie zwraca zamówienie, powiadomienie powtarza
-   się co `ANNOUNCE_INTERVAL` sekund (pierwsze od razu); gdy zapytanie przestanie
-   zwracać wiersz — cykl się resetuje i kolejne zamówienie anonsowane jest
+   **Powtarzanie:** powiadomienie gra na WŁASNYM zegarze co `ANNOUNCE_INTERVAL`
+   sekund (pierwsze od razu po wykryciu) — niezależnie od tego, jak często chodzą
+   polli; poll tylko potwierdza, czy zamówienie nadal jest. `ANNOUNCE_INTERVAL=0`
+   = stary tryb: raz po każdym sprawdzeniu bazy (co poll). Gdy poll nie znajdzie
+   zamówienia — cykl się resetuje i kolejne zamówienie anonsowane jest
    natychmiast. Bot nie pamięta obsłużonych zamówień.
 4. Połączenie WebSocket z Zello trzymane otwarte; po zerwaniu: 5 s przerwy,
    ponowne połączenie i logowanie (bez exponential backoff).
@@ -132,7 +134,7 @@ ZELLO_AUTH_TOKEN=
 
 # --- Zachowanie ---
 POLL_INTERVAL=3
-ANNOUNCE_INTERVAL=30   # co ile s powtarzać powiadomienie, dopóki jest zamówienie
+ANNOUNCE_INTERVAL=30   # co ile s powtarzać; 0 = raz na poll (jak dawniej)
 ZELLO_WAIT_ONLINE=false   # false = wysyłaj bez czekania na "online" kanału
 SEND_TEXT=true
 SEND_VOICE=true

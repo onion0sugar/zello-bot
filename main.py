@@ -95,33 +95,50 @@ async def run_service(cfg: SimpleNamespace, stop: asyncio.Event | None = None) -
     # sukcesu) — chwilowa niedostępność bazy przy starcie NIE wywala serwisu,
     # tylko loguje błąd i ponawia próbę co RECONNECT_DELAY.
     db = None
-    # Powiadomienie powtarza się co ANNOUNCE_INTERVAL, dopóki query.sql zwraca
-    # wiersz; brak wiersza = reset cyklu (następne zamówienie anonsowane od razu).
-    last_announce: float | None = None
+    # Dwa niezależne rytmy:
+    #   * poll (POLL_INTERVAL)        — sprawdzenie bazy: czy zamówienie nadal jest,
+    #   * announce (ANNOUNCE_INTERVAL) — powiadomienie na WŁASNYM zegarze; pierwszy
+    #     anons natychmiast po wykryciu, potem co ANNOUNCE_INTERVAL — niezależnie
+    #     od tego, jak często polli chodzą. Poll z "brak zamówienia" kończy cykl.
+    next_poll = time.monotonic()
+    next_announce: float | None = None  # None = brak aktywnego zamówienia
+    order_active = False
+    active_number = ""
     while not stop.is_set():
         try:
-            if db is None:
-                db = connect_db(cfg)
-            with db.cursor() as cursor:
-                order = get_next_order(cursor, query)
-            if order:
-                order_id, order_number = order
-                now = time.monotonic()
-                if last_announce is None or now - last_announce >= cfg.announce_interval:
+            now = time.monotonic()
+            if now >= next_poll:
+                if db is None:
+                    db = connect_db(cfg)
+                with db.cursor() as cursor:
+                    order = get_next_order(cursor, query)
+                if order:
+                    order_id, order_number = order
                     logger.info("Query OK — new order: %s (id=%s)", order_number, order_id)
-                    await notify(z, cfg, order_number, voice_packets)
-                    last_announce = time.monotonic()
+                    if cfg.announce_interval <= 0:
+                        # ANNOUNCE_INTERVAL=0 → anons raz po sprawdzeniu bazy
+                        await notify(z, cfg, order_number, voice_packets)
+                        order_active = False  # bez zegara powtórek
+                    else:
+                        if not order_active:
+                            next_announce = now  # pierwszy anons natychmiast
+                        order_active = True
+                        active_number = order_number
                 else:
-                    logger.info(
-                        "Query OK — new order: %s — powtórka za %.0f s",
-                        order_number,
-                        cfg.announce_interval - (now - last_announce),
-                    )
-            else:
-                logger.info("Query OK — no new orders")
-                last_announce = None  # reset — nowy cykl powiadamiania
-            # stały rytm pollingu — także gdy zapytanie ciągle zwraca ten sam wiersz
-            await asyncio.wait_for(stop.wait(), timeout=cfg.poll_interval)
+                    logger.info("Query OK — no new orders")
+                    order_active = False
+                    next_announce = None  # koniec cyklu powiadamiania
+                next_poll = now + cfg.poll_interval
+            # powiadomienie na własnym rytmie — pomiędzy sprawdzeniami bazy
+            if order_active and next_announce is not None and now >= next_announce:
+                await notify(z, cfg, active_number, voice_packets)
+                next_announce = now + cfg.announce_interval
+            # sen do najbliższego terminu: poll albo announce
+            now = time.monotonic()
+            wait_secs = cfg.poll_interval
+            if order_active and next_announce is not None:
+                wait_secs = min(wait_secs, max(0.0, next_announce - now))
+            await asyncio.wait_for(stop.wait(), timeout=wait_secs)
         except asyncio.TimeoutError:
             pass  # przerwa pollingu — oczekiwane zachowanie, nie błąd
         except asyncio.CancelledError:

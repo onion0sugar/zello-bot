@@ -161,8 +161,30 @@ class ServiceLoopTests(unittest.IsolatedAsyncioTestCase):
         assert attempts["n"] == 2  # pierwsza padła, druga się udała
         assert stop.is_set()
 
-    async def test_loop_repeats_announcement_until_no_order(self):
-        """Powiadomienie powtarza się co announce_interval, dopóki jest wiersz."""
+    async def test_loop_announces_on_strict_interval_between_polls(self):
+        """Audio gra co announce_interval na własnym zegarze, NIE co poll."""
+        db = FakeDB()
+        zello = FakeZello()
+        stop = asyncio.Event()
+        main.connect_db = lambda cfg: db
+        main.Zello = lambda *a, **kw: zello
+        main.get_next_order = lambda cursor, query: (101, "ZAM/2026/1234")
+
+        async def stop_later():
+            await asyncio.sleep(0.15)
+            stop.set()
+
+        asyncio.get_running_loop().create_task(stop_later())
+
+        # poll co 0.2 s (w oknie 0.15 s zdarzy się ~1 poll), announce co 0.02 s
+        result = await run_service(
+            make_cfg(poll_interval=0.2, announce_interval=0.02), stop=stop
+        )
+        assert result == 0
+        assert len(zello.texts) >= 5  # ~7 anonsów mimo zaledwie 1-2 polli
+
+    async def test_loop_stops_announcing_when_poll_finds_no_order(self):
+        """Poll z 'brak zamówienia' kończy cykl — kolejne anonse nie odpalają."""
         db = FakeDB()
         zello = FakeZello()
         stop = asyncio.Event()
@@ -172,18 +194,23 @@ class ServiceLoopTests(unittest.IsolatedAsyncioTestCase):
 
         def fake_get_next_order(cursor, query):
             calls["n"] += 1
-            if calls["n"] >= 3:
-                stop.set()
-                return None  # kolejne zapytanie: brak zamówienia → koniec powtórek
-            return (101, "ZAM/2026/1234")
+            return (101, "ZAM/2026/1234") if calls["n"] == 1 else None
 
         main.get_next_order = fake_get_next_order
 
+        async def stop_later():
+            await asyncio.sleep(0.15)
+            stop.set()
+
+        asyncio.get_running_loop().create_task(stop_later())
+
+        # poll co 0.02 s < announce 0.05 s: 1. poll widzi zamówienie i anonsuje,
+        # 2. poll (0.02 s) już nie widzi → cykl anulowany przed drugim anonsem
         result = await run_service(
-            make_cfg(poll_interval=0.02, announce_interval=0.01), stop=stop
+            make_cfg(poll_interval=0.02, announce_interval=0.05), stop=stop
         )
         assert result == 0
-        assert len(zello.texts) == 2  # 2 wiersze → 2 powiadomienia, 3. zapytanie puste
+        assert len(zello.texts) == 1  # tylko pierwszy anons; reszta okna = cisza
 
     async def test_loop_respects_announce_interval(self):
         """Interwał 60 s >> czas testu → tylko 1 powiadomienie mimo ciągłych wierszy."""
@@ -234,6 +261,29 @@ class ServiceLoopTests(unittest.IsolatedAsyncioTestCase):
         assert result == 0
         # 1. poll: ZAM/1 → powiadomienie; 2. poll: brak → reset; 3. poll: ZAM/2 → od razu
         assert len(zello.texts) == 2
+
+    async def test_loop_announce_interval_zero_sends_once_per_poll(self):
+        """ANNOUNCE_INTERVAL=0 → anons raz po każdym sprawdzeniu bazy (co poll)."""
+        db = FakeDB()
+        zello = FakeZello()
+        stop = asyncio.Event()
+        main.connect_db = lambda cfg: db
+        main.Zello = lambda *a, **kw: zello
+        calls = {"n": 0}
+
+        def fake_get_next_order(cursor, query):
+            calls["n"] += 1
+            if calls["n"] >= 4:
+                stop.set()
+            return (101, "ZAM/2026/1234")
+
+        main.get_next_order = fake_get_next_order
+
+        result = await run_service(
+            make_cfg(poll_interval=0.02, announce_interval=0), stop=stop
+        )
+        assert result == 0
+        assert len(zello.texts) == 4  # 4 polli z zamówieniem → 4 anonse, zero pomiędzy
 
     async def test_missing_query_file_fails_fast(self):
         with patch("main.load_query", side_effect=DbError("Brak pliku zapytania: query.sql")):
