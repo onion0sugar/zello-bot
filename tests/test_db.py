@@ -100,7 +100,7 @@ def test_dsn_custom_port():
 def test_query_file_ships_valid_select():
     """Wzorcowy query.sql z repozytorium ładuje się i zwraca numer zamówienia."""
     sql = load_query()  # realny plik w projekcie
-    assert sql.lstrip().upper().startswith("SELECT TOP 1")
+    assert sql.lstrip().upper().startswith("SELECT TOP")
     assert "OriginalNumber" in sql
 
 

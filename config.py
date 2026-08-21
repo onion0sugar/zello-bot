@@ -47,6 +47,8 @@ def load_config(env_file: str | None = None) -> SimpleNamespace:
         zello_wait_online=_flag("ZELLO_WAIT_ONLINE", "true"),
         # Zachowanie
         poll_interval=max(1, int(_env("POLL_INTERVAL", "3") or "3")),
+        # Co ile sekund powtarzać powiadomienie, dopóki query.sql zwraca wiersz
+        announce_interval=max(1, int(_env("ANNOUNCE_INTERVAL", "30") or "30")),
         send_text=_flag("SEND_TEXT", "true"),
         send_voice=_flag("SEND_VOICE", "true"),
         voice_file=_env("VOICE_FILE", "audio/new_order.wav"),

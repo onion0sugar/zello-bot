@@ -46,6 +46,7 @@ def test_defaults(monkeypatch):
     assert cfg.mssql_encrypt == "yes"
     assert cfg.mssql_trust_server_certificate == "yes"
     assert cfg.poll_interval == 3
+    assert cfg.announce_interval == 30
     assert cfg.send_text is True
     assert cfg.send_voice is True
     assert cfg.zello_auth_token == ""
@@ -54,12 +55,20 @@ def test_defaults(monkeypatch):
 
 def test_flags_parsed(monkeypatch):
     values = dict(REQUIRED)
-    values.update({"SEND_TEXT": "false", "SEND_VOICE": "no", "POLL_INTERVAL": "10"})
+    values.update(
+        {
+            "SEND_TEXT": "false",
+            "SEND_VOICE": "no",
+            "POLL_INTERVAL": "10",
+            "ANNOUNCE_INTERVAL": "45",
+        }
+    )
     _set_env(monkeypatch, values)
     cfg = load_config()
     assert cfg.send_text is False
     assert cfg.send_voice is False
     assert cfg.poll_interval == 10
+    assert cfg.announce_interval == 45
 
 
 def test_fnf_auth_token_and_network_both_loaded(monkeypatch):

@@ -1,8 +1,8 @@
 """Zello Bot — MSSQL → Zello (tekst + głos).
 
 Zapytanie o zamówienia edytujesz w pliku query.sql (NIE w kodzie!).
-Bot NIE zapamiętuje zamówień: każde zwrócenie wiersza przez zapytanie
-= powiadomienie (nawet dla tego samego wiersza co w poprzednim pollingu).
+Bot NIE zapamiętuje zamówień: dopóki zapytanie zwraca wiersz, powiadomienie
+powtarza się co ANNOUNCE_INTERVAL sekund; znika wiersz → cykl się resetuje.
 
 Warianty:
     python main.py                  # serwis: polling co POLL_INTERVAL sekund
@@ -18,6 +18,7 @@ import asyncio
 import logging
 import signal
 import sys
+import time
 from types import SimpleNamespace
 
 from audio import VoiceFileError, codec_header, encode_opus, wav_to_pcm
@@ -94,6 +95,9 @@ async def run_service(cfg: SimpleNamespace, stop: asyncio.Event | None = None) -
     # sukcesu) — chwilowa niedostępność bazy przy starcie NIE wywala serwisu,
     # tylko loguje błąd i ponawia próbę co RECONNECT_DELAY.
     db = None
+    # Powiadomienie powtarza się co ANNOUNCE_INTERVAL, dopóki query.sql zwraca
+    # wiersz; brak wiersza = reset cyklu (następne zamówienie anonsowane od razu).
+    last_announce: float | None = None
     while not stop.is_set():
         try:
             if db is None:
@@ -102,10 +106,20 @@ async def run_service(cfg: SimpleNamespace, stop: asyncio.Event | None = None) -
                 order = get_next_order(cursor, query)
             if order:
                 order_id, order_number = order
-                logger.info("Query OK — new order: %s (id=%s)", order_number, order_id)
-                await notify(z, cfg, order_number, voice_packets)
+                now = time.monotonic()
+                if last_announce is None or now - last_announce >= cfg.announce_interval:
+                    logger.info("Query OK — new order: %s (id=%s)", order_number, order_id)
+                    await notify(z, cfg, order_number, voice_packets)
+                    last_announce = time.monotonic()
+                else:
+                    logger.info(
+                        "Query OK — new order: %s — powtórka za %.0f s",
+                        order_number,
+                        cfg.announce_interval - (now - last_announce),
+                    )
             else:
                 logger.info("Query OK — no new orders")
+                last_announce = None  # reset — nowy cykl powiadamiania
             # stały rytm pollingu — także gdy zapytanie ciągle zwraca ten sam wiersz
             await asyncio.wait_for(stop.wait(), timeout=cfg.poll_interval)
         except asyncio.TimeoutError:
